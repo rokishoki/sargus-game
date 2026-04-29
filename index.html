@@ -1,4 +1,4 @@
-!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="he">
 <head>
   <meta charset="UTF-8" />
@@ -31,6 +31,49 @@
     .game-shell {
       width: min(920px, 100%);
       padding: 18px;
+      position: relative;
+    }
+
+    .lobby {
+      position: absolute;
+      inset: 0;
+      background: rgba(4, 20, 38, 0.95);
+      border-radius: 20px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 24px;
+      gap: 18px;
+      z-index: 5;
+    }
+
+    .lobby h2 {
+      margin: 0;
+      font-size: clamp(2rem, 3vw, 3rem);
+    }
+
+    .lobby p {
+      margin: 0;
+      line-height: 1.6;
+      max-width: 560px;
+      color: #c7eaf7;
+    }
+
+    .play-button {
+      border: none;
+      background: #4db8ff;
+      color: #042c4f;
+      padding: 14px 26px;
+      border-radius: 999px;
+      font-size: 1.05rem;
+      font-weight: bold;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .play-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
     }
 
     header {
@@ -104,6 +147,44 @@
       box-shadow: 0 16px 30px rgba(0, 0, 0, 0.18);
     }
 
+    .button-group {
+      margin-top: 14px;
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .save-btn {
+      border: none;
+      background: #4db8ff;
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .save-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+    }
+
+    .load-btn {
+      background: #66bb6a;
+    }
+
+    .clear-btn {
+      background: #ef5350;
+    }
+
+    .save-status {
+      margin-top: 10px;
+      font-size: 0.9rem;
+      color: #c0e0dd;
+    }
+
     @media (max-width: 600px) {
       .scoreboard {
         flex-direction: column;
@@ -128,11 +209,24 @@
         <div>ניקיון: <span id="score">0</span></div>
         <div>חיים: <span id="lives">3</span></div>
       </div>
+      <div id="lobby" class="lobby">
+        <div>
+          <h2>ברוכים הבאים לסרגוס</h2>
+          <p>לחץ על "הפעל" כדי להתחיל לשחק. הזז את סרגוס עם החיצים או WASD, ואסוף את הבקבוקים לפני שהם נופלים לתחתית.</p>
+        </div>
+        <button id="playButton" class="play-button">הפעל</button>
+      </div>
       <canvas id="gameCanvas" width="800" height="520"></canvas>
       <div class="controls">
-        <span>שימוש בחיצים</span>
+        <span>השתמש בחיצים או WASD</span>
         <span>או ישירות על המסך במגע</span>
       </div>
+      <div class="button-group">
+        <button id="saveButton" class="save-btn">שמור התקדמות</button>
+        <button id="loadButton" class="save-btn load-btn" disabled>טען משמור</button>
+        <button id="clearButton" class="save-btn clear-btn">מחק משמור</button>
+      </div>
+      <div id="saveStatus" class="save-status"></div>
       <div id="message" class="message hidden"></div>
       <button id="restartButton" class="restart hidden">התחל מחדש</button>
     </main>
@@ -149,11 +243,20 @@
     const livesEl = document.getElementById("lives");
     const messageEl = document.getElementById("message");
     const restartButton = document.getElementById("restartButton");
+    const saveButton = document.getElementById("saveButton");
+    const loadButton = document.getElementById("loadButton");
+    const clearButton = document.getElementById("clearButton");
+    const saveStatus = document.getElementById("saveStatus");
+    const lobby = document.getElementById("lobby");
+    const playButton = document.getElementById("playButton");
+
+    const SAVE_KEY = "sargus_game_save";
 
     const state = {
       score: 0,
       lives: 3,
-      running: true,
+      running: false,
+      started: false,
       width: canvas.width,
       height: canvas.height,
       keys: {
@@ -161,6 +264,10 @@
         ArrowRight: false,
         ArrowUp: false,
         ArrowDown: false,
+        a: false,
+        d: false,
+        w: false,
+        s: false,
       },
       touch: null,
       trash: [],
@@ -200,6 +307,66 @@
       livesEl.textContent = state.lives;
     }
 
+    function showLobby() {
+      lobby.style.display = "grid";
+      state.started = false;
+      state.running = false;
+    }
+
+    function hideLobby() {
+      lobby.style.display = "none";
+    }
+
+    function startGame() {
+      state.started = true;
+      hideLobby();
+      resetGame();
+    }
+
+    function saveGame() {
+      const saveData = {
+        score: state.score,
+        lives: state.lives,
+        timestamp: new Date().toLocaleString("he-IL"),
+      };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
+      saveStatus.textContent = `✓ התקדמות נשמרה - ניקיון: ${state.score}, חיים: ${state.lives}`;
+      setTimeout(() => {
+        saveStatus.textContent = "";
+      }, 3000);
+      updateLoadButtonState();
+    }
+
+    function loadGame() {
+      const savedData = localStorage.getItem(SAVE_KEY);
+      if (!savedData) return;
+
+      const data = JSON.parse(savedData);
+      state.score = data.score;
+      state.lives = data.lives;
+      updateUI();
+      saveStatus.textContent = `✓ התקדמות נטענה - ניקיון: ${state.score}, חיים: ${state.lives}`;
+      setTimeout(() => {
+        saveStatus.textContent = "";
+      }, 3000);
+    }
+
+    function clearSave() {
+      if (confirm("האם אתה בטוח שברצונך למחוק את ההתקדמות השמורה?")) {
+        localStorage.removeItem(SAVE_KEY);
+        saveStatus.textContent = "✓ המשמור נמחק";
+        setTimeout(() => {
+          saveStatus.textContent = "";
+        }, 2000);
+        updateLoadButtonState();
+      }
+    }
+
+    function updateLoadButtonState() {
+      const hasSave = localStorage.getItem(SAVE_KEY) !== null;
+      loadButton.disabled = !hasSave;
+    }
+
     function clamp(value, min, max) {
       return Math.min(Math.max(value, min), max);
     }
@@ -208,7 +375,7 @@
       const type = trashTypes[Math.floor(Math.random() * trashTypes.length)];
       state.trash.push({
         x: Math.random() * (state.width - 80) + 40,
-        y: -30,
+        y: -40,
         speed: Math.random() * 1.8 + 1.2,
         radius: type.radius,
         color: type.color,
@@ -220,10 +387,10 @@
       const step = fish.speed;
       let dx = 0;
       let dy = 0;
-      if (state.keys.ArrowLeft) dx -= step;
-      if (state.keys.ArrowRight) dx += step;
-      if (state.keys.ArrowUp) dy -= step;
-      if (state.keys.ArrowDown) dy += step;
+      if (state.keys.ArrowLeft || state.keys.a) dx -= step;
+      if (state.keys.ArrowRight || state.keys.d) dx += step;
+      if (state.keys.ArrowUp || state.keys.w) dy -= step;
+      if (state.keys.ArrowDown || state.keys.s) dy += step;
       if (state.touch) {
         dx = state.touch.x - fish.x;
         dy = state.touch.y - fish.y;
@@ -315,15 +482,32 @@
       for (const item of state.trash) {
         ctx.save();
         ctx.translate(item.x, item.y);
-        ctx.rotate(Math.sin(item.angle) * 0.4);
+        ctx.rotate(Math.sin(item.angle) * 0.2);
+
+        const bottleWidth = item.radius * 0.9;
+        const bottleHeight = item.radius * 2.2;
+        const capHeight = item.radius * 0.4;
+
         ctx.fillStyle = item.color;
         ctx.beginPath();
-        ctx.rect(-item.radius, -item.radius, item.radius * 2, item.radius * 2);
+        ctx.moveTo(-bottleWidth / 2, -bottleHeight / 2 + capHeight);
+        ctx.lineTo(-bottleWidth / 2, bottleHeight / 2 - capHeight);
+        ctx.quadraticCurveTo(-bottleWidth / 2, bottleHeight / 2, -bottleWidth / 2 + capHeight, bottleHeight / 2);
+        ctx.lineTo(bottleWidth / 2 - capHeight, bottleHeight / 2);
+        ctx.quadraticCurveTo(bottleWidth / 2, bottleHeight / 2, bottleWidth / 2, bottleHeight / 2 - capHeight);
+        ctx.lineTo(bottleWidth / 2, -bottleHeight / 2 + capHeight);
+        ctx.quadraticCurveTo(bottleWidth / 2, -bottleHeight / 2, bottleWidth / 2 - capHeight, -bottleHeight / 2);
+        ctx.lineTo(-bottleWidth / 2 + capHeight, -bottleHeight / 2);
+        ctx.quadraticCurveTo(-bottleWidth / 2, -bottleHeight / 2, -bottleWidth / 2, -bottleHeight / 2 + capHeight);
+        ctx.closePath();
         ctx.fill();
-        ctx.fillStyle = "rgba(255,255,255,0.4)";
-        ctx.beginPath();
-        ctx.arc(-item.radius / 3, -item.radius / 3, item.radius * 0.35, 0, Math.PI * 2);
-        ctx.fill();
+
+        ctx.fillStyle = "#d8f1ff";
+        ctx.fillRect(-bottleWidth * 0.2, -bottleHeight * 0.25, bottleWidth * 0.4, bottleHeight * 0.75);
+
+        ctx.fillStyle = "#a3d9ff";
+        ctx.fillRect(-bottleWidth * 0.18, -bottleHeight / 2 - capHeight, bottleWidth * 0.36, capHeight);
+
         ctx.restore();
       }
     }
@@ -367,14 +551,16 @@
     }
 
     window.addEventListener("keydown", (event) => {
-      if (event.key in state.keys) {
-        state.keys[event.key] = true;
+      const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      if (key in state.keys) {
+        state.keys[key] = true;
       }
     });
 
     window.addEventListener("keyup", (event) => {
-      if (event.key in state.keys) {
-        state.keys[event.key] = false;
+      const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      if (key in state.keys) {
+        state.keys[key] = false;
       }
     });
 
@@ -399,8 +585,13 @@
       state.touch = null;
     });
 
+    playButton.addEventListener("click", startGame);
     restartButton.addEventListener("click", resetGame);
-    resetGame();
+    saveButton.addEventListener("click", saveGame);
+    loadButton.addEventListener("click", loadGame);
+    clearButton.addEventListener("click", clearSave);
+    updateLoadButtonState();
+    showLobby();
   </script>
 </body>
 </html>
