@@ -16,22 +16,39 @@
       box-sizing: border-box;
     }
 
+    html,
     body {
       margin: 0;
+      padding: 0;
+      height: 100%;
+    }
+
+    body {
       font-family: "Arial", sans-serif;
       direction: rtl;
-      background: radial-gradient(circle at top, #93dfff 0%, #0d5894 55%, #042d46 100%);
-      color: #fff;
+      background: radial-gradient(circle at top, #5c7ea6 0%, #092f57 50%, #021423 100%);
+      color: #f0f5ff;
       min-height: 100vh;
       display: flex;
       justify-content: center;
-      align-items: center;
+      align-items: stretch;
     }
 
     .game-shell {
-      width: min(920px, 100%);
+      width: 100vw;
+      height: 100vh;
       padding: 18px;
       position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
     }
 
     .lobby {
@@ -96,17 +113,23 @@
       display: flex;
       justify-content: space-between;
       gap: 14px;
-      margin-bottom: 12px;
       font-size: 1.1rem;
+      padding: 14px 18px;
+      background: rgba(0, 0, 0, 0.16);
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(8px);
     }
 
     canvas {
       width: 100%;
-      background: linear-gradient(to bottom, rgba(83, 184, 220, 0.95), rgba(13, 111, 153, 0.95));
-      border: 4px solid rgba(255, 255, 255, 0.22);
+      flex: 1;
+      min-height: 320px;
+      background: linear-gradient(to bottom, rgba(30, 72, 102, 0.95), rgba(5, 28, 45, 0.95));
+      border: 4px solid rgba(255, 255, 255, 0.12);
       border-radius: 18px;
       display: block;
-      box-shadow: 0 0 40px rgba(0, 0, 0, 0.25);
+      box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.3), 0 0 40px rgba(0, 0, 0, 0.35);
     }
 
     .controls,
@@ -272,6 +295,10 @@
       touch: null,
       trash: [],
       lastSpawn: 0,
+      startTime: 0,
+      lastFrame: 0,
+      elapsed: 0,
+      eatEffect: 0,
     };
 
     const fish = {
@@ -288,16 +315,29 @@
       { color: "#6dd7ff", radius: 12 },
     ];
 
+    function resizeCanvas() {
+      canvas.width = canvas.clientWidth;
+      canvas.height = canvas.clientHeight;
+      state.width = canvas.width;
+      state.height = canvas.height;
+    }
+
     function resetGame() {
+      resizeCanvas();
       state.score = 0;
       state.lives = 3;
       state.running = true;
       state.trash = [];
       state.lastSpawn = 0;
+      state.startTime = performance.now();
+      state.lastFrame = state.startTime;
+      state.elapsed = 0;
+      state.eatEffect = 0;
       fish.x = state.width / 2;
       fish.y = state.height * 0.6;
       messageEl.classList.add("hidden");
       restartButton.classList.add("hidden");
+      autoSave();
       updateUI();
       requestAnimationFrame(loop);
     }
@@ -305,6 +345,17 @@
     function updateUI() {
       scoreEl.textContent = state.score;
       livesEl.textContent = state.lives;
+    }
+
+    function autoSave() {
+      if (!state.started) return;
+      const saveData = {
+        score: state.score,
+        lives: state.lives,
+        timestamp: new Date().toLocaleString("he-IL"),
+      };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
+      updateLoadButtonState();
     }
 
     function showLobby() {
@@ -320,7 +371,29 @@
     function startGame() {
       state.started = true;
       hideLobby();
-      resetGame();
+      resizeCanvas();
+      const savedData = localStorage.getItem(SAVE_KEY);
+      if (savedData) {
+        const data = JSON.parse(savedData);
+        state.score = data.score;
+        state.lives = data.lives;
+      } else {
+        state.score = 0;
+        state.lives = 3;
+      }
+      state.running = true;
+      state.trash = [];
+      state.lastSpawn = 0;
+      state.startTime = performance.now();
+      state.lastFrame = state.startTime;
+      state.elapsed = 0;
+      state.eatEffect = 0;
+      fish.x = state.width / 2;
+      fish.y = state.height * 0.6;
+      messageEl.classList.add("hidden");
+      restartButton.classList.add("hidden");
+      updateUI();
+      requestAnimationFrame(loop);
     }
 
     function saveGame() {
@@ -373,10 +446,11 @@
 
     function spawnTrash() {
       const type = trashTypes[Math.floor(Math.random() * trashTypes.length)];
+      const difficultyBoost = Math.min(state.elapsed / 22000, 1.4);
       state.trash.push({
         x: Math.random() * (state.width - 80) + 40,
         y: -40,
-        speed: Math.random() * 1.8 + 1.2,
+        speed: 0.8 + Math.random() * 1.2 + difficultyBoost,
         radius: type.radius,
         color: type.color,
         angle: Math.random() * Math.PI * 2,
@@ -416,10 +490,13 @@
         const dist = Math.hypot(item.x - fish.x, item.y - fish.y);
         if (dist < fish.size + item.radius - 4) {
           state.score += 1;
+          state.eatEffect = 18;
+          autoSave();
           return false;
         }
         if (item.y - item.radius > state.height) {
           state.lives -= 1;
+          autoSave();
           return false;
         }
         return true;
@@ -449,30 +526,69 @@
       ctx.translate(fish.x, fish.y);
       ctx.scale(fish.direction, 1);
 
-      ctx.fillStyle = "#f6c773";
+      if (state.eatEffect > 0) {
+        const glowRadius = fish.size + state.eatEffect * 1.8;
+        ctx.strokeStyle = `rgba(180, 240, 255, ${0.25 + state.eatEffect * 0.02})`;
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.arc(0, 0, glowRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        state.eatEffect -= 1;
+      }
+
+      ctx.fillStyle = "#aac9df";
       ctx.beginPath();
-      ctx.ellipse(0, 0, fish.size, fish.size * 0.65, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, fish.size * 1.05, fish.size * 0.65, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = "#e0a954";
+      ctx.fillStyle = "#70849c";
+      ctx.fillRect(-fish.size * 0.65, -fish.size * 0.23, fish.size * 1.3, fish.size * 0.45);
+      ctx.fillRect(-fish.size * 0.6, -fish.size * 0.38, fish.size * 1.2, fish.size * 0.18);
+      ctx.fillRect(-fish.size * 0.5, -fish.size * 0.55, fish.size * 0.4, fish.size * 0.12);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.4)";
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.ellipse(-10, 0, fish.size * 0.7, fish.size * 0.5, 0, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.moveTo(-fish.size * 0.3, -fish.size * 0.05);
+      ctx.lineTo(fish.size * 0.3, -fish.size * 0.05);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-fish.size * 0.3, fish.size * 0.15);
+      ctx.lineTo(fish.size * 0.3, fish.size * 0.15);
+      ctx.stroke();
 
       ctx.fillStyle = "#fff";
       ctx.beginPath();
-      ctx.arc(12, -8, 7, 0, Math.PI * 2);
+      ctx.arc(12, -8, 10, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = "#1d2437";
+      ctx.fillStyle = "#0b2434";
       ctx.beginPath();
-      ctx.arc(14, -8, 3.5, 0, Math.PI * 2);
+      ctx.arc(14, -8, 4, 0, Math.PI * 2);
       ctx.fill();
+      ctx.strokeStyle = "#72d8ff";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(12, -8, 14, 0, Math.PI * 2);
+      ctx.stroke();
 
-      ctx.fillStyle = "#fed176";
+      ctx.fillStyle = "#697c8b";
       ctx.beginPath();
       ctx.moveTo(-fish.size * 0.4, 12);
-      ctx.quadraticCurveTo(-fish.size * 0.2, fish.size * 0.5, 8, 10);
-      ctx.quadraticCurveTo(-fish.size * 0.1, fish.size * 0.2, -fish.size * 0.4, 12);
+      ctx.lineTo(-fish.size * 0.15, 8);
+      ctx.lineTo(-fish.size * 0.12, 12);
+      ctx.lineTo(-fish.size * 0.07, 8);
+      ctx.lineTo(0, 12);
+      ctx.lineTo(fish.size * 0.2, 8);
+      ctx.lineTo(fish.size * 0.3, 12);
+      ctx.lineTo(-fish.size * 0.4, 12);
+      ctx.fill();
+
+      ctx.fillStyle = "#6ba6b9";
+      ctx.beginPath();
+      ctx.moveTo(fish.size * 0.5, -fish.size * 0.2);
+      ctx.lineTo(fish.size * 0.7, -fish.size * 0.3);
+      ctx.lineTo(fish.size * 0.7, -fish.size * 0.05);
+      ctx.closePath();
       ctx.fill();
 
       ctx.restore();
@@ -526,13 +642,18 @@
     function loop(timestamp) {
       if (!state.running) return;
 
-      if (timestamp - state.lastSpawn > 850) {
+      const delta = timestamp - state.lastFrame;
+      state.lastFrame = timestamp;
+      state.elapsed = timestamp - state.startTime;
+      const spawnInterval = Math.max(500, 1200 - Math.floor(state.elapsed / 1000) * 12);
+
+      if (timestamp - state.lastSpawn > spawnInterval) {
         spawnTrash();
         state.lastSpawn = timestamp;
       }
 
       updateFish();
-      updateTrash(timestamp);
+      updateTrash(delta);
       drawBackground();
       drawTrash();
       drawFish();
@@ -563,6 +684,8 @@
         state.keys[key] = false;
       }
     });
+
+    window.addEventListener("resize", resizeCanvas);
 
     canvas.addEventListener("pointerdown", (event) => {
       const rect = canvas.getBoundingClientRect();
