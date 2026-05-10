@@ -73,6 +73,94 @@
       border-radius: 5px;
     }
 
+    #fullInventory {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.9);
+      padding: 20px;
+      border-radius: 10px;
+      display: none;
+      z-index: 2000;
+      max-width: 600px;
+    }
+
+    #fullInventory h3 {
+      color: white;
+      margin-top: 0;
+      text-align: center;
+    }
+
+    .inventory-grid {
+      display: grid;
+      grid-template-columns: repeat(9, 1fr);
+      gap: 2px;
+      margin-bottom: 20px;
+    }
+
+    .inventory-slot {
+      width: 40px;
+      height: 40px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 12px;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .inventory-slot:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .inventory-slot.selected {
+      border-color: yellow;
+      box-shadow: 0 0 5px yellow;
+    }
+
+    .crafting-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 2px;
+      margin-bottom: 10px;
+    }
+
+    .crafting-result {
+      width: 40px;
+      height: 40px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 12px;
+      margin: 0 auto;
+    }
+
+    #health-bar {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      gap: 2px;
+    }
+
+    .heart {
+      width: 20px;
+      height: 20px;
+      background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="red"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>') no-repeat center;
+      background-size: contain;
+    }
+
+    .heart.empty {
+      opacity: 0.3;
+    }
+
     .block-item {
       width: 40px;
       height: 40px;
@@ -124,12 +212,20 @@
 
   <div id="crosshair"></div>
 
-  <div id="inventory">
-    <div id="grass" class="block-item selected" style="background-color: #228B22;" data-block="grass"></div>
-    <div id="dirt" class="block-item" style="background-color: #8B4513;" data-block="dirt"></div>
-    <div id="stone" class="block-item" style="background-color: #696969;" data-block="stone"></div>
-    <div id="wood" class="block-item" style="background-color: #8B4513;" data-block="wood"></div>
-    <div id="sand" class="block-item" style="background-color: #F4A460;" data-block="sand"></div>
+  <div id="fullInventory">
+    <h3>Inventory</h3>
+    <div class="inventory-grid" id="inventoryGrid">
+      <!-- 36 inventory slots will be created by JavaScript -->
+    </div>
+    <h4>Crafting</h4>
+    <div class="crafting-grid" id="craftingGrid">
+      <!-- 9 crafting slots -->
+    </div>
+    <div class="crafting-result" id="craftingResult"></div>
+  </div>
+
+  <div id="health-bar">
+    <!-- 10 hearts will be created by JavaScript -->
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -141,29 +237,159 @@
     const selectedBlockEl = document.getElementById('selectedBlock');
     const instructions = document.getElementById('instructions');
     const startButton = document.getElementById('startButton');
-    const blockItems = document.querySelectorAll('.block-item');
+    const fullInventory = document.getElementById('fullInventory');
+    const inventoryGrid = document.getElementById('inventoryGrid');
+    const craftingGrid = document.getElementById('craftingGrid');
+    const craftingResult = document.getElementById('craftingResult');
+    const healthBar = document.getElementById('healthBar');
 
-    let mouseX = window.innerWidth / 2;
-    let mouseY = window.innerHeight / 2;
-    let prevMouseX = window.innerWidth / 2;
-    let prevMouseY = window.innerHeight / 2;
+    let scene, camera, renderer, controls;
+    let world = {};
+    let selectedSlot = 0;
+    let isLocked = false;
+    let inventoryOpen = false;
+    let velocity = new THREE.Vector3();
+    let direction = new THREE.Vector3();
+    let prevTime = performance.now();
+    let mobs = [];
+    let dayTime = 0;
+    let health = 20;
+    let hunger = 20;
+
+    // Player stats
+    let player = {
+      health: 20,
+      hunger: 20,
+      experience: 0,
+      level: 1,
+      inventory: new Array(36).fill(null),
+      craftingGrid: new Array(9).fill(null),
+      selectedSlot: 0
+    };
 
     const CHUNK_SIZE = 16;
     const WORLD_HEIGHT = 64;
-    const GRAVITY = -9.8;
+    const GRAVITY = -30;
     const JUMP_FORCE = 15;
-    const MOVE_SPEED = 20;
+    const MOVE_SPEED = 25;
     const loadedChunks = new Set();
 
-    const blockMaterials = {
-      grass: new THREE.MeshLambertMaterial({ color: 0x228B22 }),
-      dirt: new THREE.MeshLambertMaterial({ color: 0x8B4513 }),
-      stone: new THREE.MeshLambertMaterial({ color: 0x696969 }),
-      wood: new THREE.MeshLambertMaterial({ color: 0x8B4513 }),
-      sand: new THREE.MeshLambertMaterial({ color: 0xF4A460 }),
+    // Tool materials and their properties
+    const toolMaterials = {
+      wooden: { durability: 60, multiplier: 2, color: 0x8B4513 },
+      stone: { durability: 132, multiplier: 4, color: 0x696969 },
+      iron: { durability: 251, multiplier: 6, color: 0xD3D3D3 },
+      diamond: { durability: 1562, multiplier: 8, color: 0xB9F2FF }
     };
 
+    // Block hardness and required tools
+    const blockProperties = {
+      grass: { hardness: 0.6, tool: 'shovel', drops: 'dirt' },
+      dirt: { hardness: 0.5, tool: 'shovel', drops: 'dirt' },
+      stone: { hardness: 1.5, tool: 'pickaxe', drops: 'cobblestone' },
+      cobblestone: { hardness: 2.0, tool: 'pickaxe', drops: 'cobblestone' },
+      wood: { hardness: 2.0, tool: 'axe', drops: 'wood' },
+      sand: { hardness: 0.5, tool: 'shovel', drops: 'sand' },
+      iron_ore: { hardness: 3.0, tool: 'pickaxe', drops: 'iron_ore', minTool: 'stone' },
+      coal_ore: { hardness: 3.0, tool: 'pickaxe', drops: 'coal', minTool: 'wooden' },
+      gold_ore: { hardness: 3.0, tool: 'pickaxe', drops: 'gold_ore', minTool: 'iron' },
+      diamond_ore: { hardness: 3.0, tool: 'pickaxe', drops: 'diamond', minTool: 'iron' }
+    };
+
+    // Items and their properties
+    const items = {
+      // Blocks
+      grass: { type: 'block', stackSize: 64, texture: 'grass' },
+      dirt: { type: 'block', stackSize: 64, texture: 'dirt' },
+      stone: { type: 'block', stackSize: 64, texture: 'stone' },
+      cobblestone: { type: 'block', stackSize: 64, texture: 'cobblestone' },
+      wood: { type: 'block', stackSize: 64, texture: 'wood' },
+      sand: { type: 'block', stackSize: 64, texture: 'sand' },
+
+      // Ores/Drops
+      iron_ore: { type: 'item', stackSize: 64, texture: 'iron_ore' },
+      coal: { type: 'item', stackSize: 64, texture: 'coal' },
+      gold_ore: { type: 'item', stackSize: 64, texture: 'gold_ore' },
+      diamond: { type: 'item', stackSize: 64, texture: 'diamond' },
+
+      // Tools
+      wooden_pickaxe: { type: 'tool', stackSize: 1, material: 'wooden', toolType: 'pickaxe' },
+      wooden_axe: { type: 'tool', stackSize: 1, material: 'wooden', toolType: 'axe' },
+      wooden_shovel: { type: 'tool', stackSize: 1, material: 'wooden', toolType: 'shovel' },
+      stone_pickaxe: { type: 'tool', stackSize: 1, material: 'stone', toolType: 'pickaxe' },
+      stone_axe: { type: 'tool', stackSize: 1, material: 'stone', toolType: 'axe' },
+      stone_shovel: { type: 'tool', stackSize: 1, material: 'stone', toolType: 'shovel' },
+      iron_pickaxe: { type: 'tool', stackSize: 1, material: 'iron', toolType: 'pickaxe' },
+      iron_axe: { type: 'tool', stackSize: 1, material: 'iron', toolType: 'axe' },
+      iron_shovel: { type: 'tool', stackSize: 1, material: 'iron', toolType: 'shovel' }
+    };
+
+    // Crafting recipes
+    const recipes = {
+      wooden_pickaxe: [
+        ['wood', 'wood', 'wood'],
+        [null, 'stick', null],
+        [null, 'stick', null]
+      ],
+      wooden_axe: [
+        ['wood', 'wood', null],
+        ['wood', 'stick', null],
+        [null, 'stick', null]
+      ],
+      wooden_shovel: [
+        [null, 'wood', null],
+        [null, 'stick', null],
+        [null, 'stick', null]
+      ],
+      stone_pickaxe: [
+        ['cobblestone', 'cobblestone', 'cobblestone'],
+        [null, 'stick', null],
+        [null, 'stick', null]
+      ],
+      stone_axe: [
+        ['cobblestone', 'cobblestone', null],
+        ['cobblestone', 'stick', null],
+        [null, 'stick', null]
+      ],
+      stone_shovel: [
+        [null, 'cobblestone', null],
+        [null, 'stick', null],
+        [null, 'stick', null]
+      ]
+    };
+
+    // Create simple textures (we'll use colors for now, but this could be extended with actual textures)
+    const blockMaterials = {};
+    const itemTextures = {};
+
+    function createMaterials() {
+      // Block materials with colors
+      const blockColors = {
+        grass: 0x228B22,
+        dirt: 0x8B4513,
+        stone: 0x808080,
+        cobblestone: 0x696969,
+        wood: 0x8B4513,
+        sand: 0xF4A460,
+        iron_ore: 0xD3D3D3,
+        coal_ore: 0x2F2F2F,
+        gold_ore: 0xFFD700,
+        diamond_ore: 0xB9F2FF
+      };
+
+      Object.keys(blockColors).forEach(block => {
+        blockMaterials[block] = new THREE.MeshLambertMaterial({ color: blockColors[block] });
+      });
+
+      // Item textures (simplified)
+      Object.keys(items).forEach(item => {
+        itemTextures[item] = items[item].texture || item;
+      });
+    }
+
     function init() {
+      createMaterials();
+
       // Scene
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x87CEEB);
@@ -180,27 +406,35 @@
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
       // Lighting
-      const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+      const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
       scene.add(ambientLight);
 
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
       directionalLight.position.set(50, 50, 50);
       directionalLight.castShadow = true;
-      directionalLight.shadow.mapSize.width = 1024;
-      directionalLight.shadow.mapSize.height = 1024;
+      directionalLight.shadow.mapSize.width = 2048;
+      directionalLight.shadow.mapSize.height = 2048;
       directionalLight.shadow.camera.near = 0.5;
       directionalLight.shadow.camera.far = 200;
-      directionalLight.shadow.camera.left = -50;
-      directionalLight.shadow.camera.right = 50;
-      directionalLight.shadow.camera.top = 50;
-      directionalLight.shadow.camera.bottom = -50;
+      directionalLight.shadow.camera.left = -100;
+      directionalLight.shadow.camera.right = 100;
+      directionalLight.shadow.camera.top = 100;
+      directionalLight.shadow.camera.bottom = -100;
       scene.add(directionalLight);
+
+      // Initialize UI
+      createInventory();
+      createHealthBar();
+      updateUI();
 
       // Generate initial world
       generateChunk(0, 0);
 
       // Add mobs
       spawnMobs();
+
+      // Give player starting items
+      giveStartingItems();
 
       // Event listeners
       startButton.addEventListener('click', startGame);
@@ -212,11 +446,175 @@
       document.addEventListener('mousemove', onMouseMove);
       window.addEventListener('resize', onWindowResize);
 
-      blockItems.forEach(item => {
-        item.addEventListener('click', () => selectBlock(item.dataset.block));
-      });
-
       animate();
+    }
+
+    function createInventory() {
+      // Create 36 inventory slots
+      for (let i = 0; i < 36; i++) {
+        const slot = document.createElement('div');
+        slot.className = 'inventory-slot';
+        slot.dataset.slot = i;
+        slot.addEventListener('click', () => selectInventorySlot(i));
+        inventoryGrid.appendChild(slot);
+      }
+
+      // Create 9 crafting slots
+      for (let i = 0; i < 9; i++) {
+        const slot = document.createElement('div');
+        slot.className = 'inventory-slot';
+        slot.dataset.craftingSlot = i;
+        slot.addEventListener('click', () => selectCraftingSlot(i));
+        craftingGrid.appendChild(slot);
+      }
+    }
+
+    function createHealthBar() {
+      for (let i = 0; i < 10; i++) {
+        const heart = document.createElement('div');
+        heart.className = 'heart';
+        healthBar.appendChild(heart);
+      }
+      updateHealthBar();
+    }
+
+    function updateHealthBar() {
+      const hearts = healthBar.children;
+      for (let i = 0; i < 10; i++) {
+        hearts[i].classList.toggle('empty', (i * 2) >= player.health);
+      }
+    }
+
+    function giveStartingItems() {
+      // Give player wooden tools and some basic blocks
+      addItemToInventory('wooden_pickaxe', 1);
+      addItemToInventory('wooden_axe', 1);
+      addItemToInventory('wooden_shovel', 1);
+      addItemToInventory('wood', 16);
+      addItemToInventory('dirt', 16);
+    }
+
+    function addItemToInventory(itemId, count) {
+      const item = items[itemId];
+      if (!item) return;
+
+      // Try to add to existing stacks first
+      for (let i = 0; i < 36; i++) {
+        if (player.inventory[i] && player.inventory[i].id === itemId && player.inventory[i].count < item.stackSize) {
+          const space = item.stackSize - player.inventory[i].count;
+          const addCount = Math.min(count, space);
+          player.inventory[i].count += addCount;
+          count -= addCount;
+          if (count <= 0) break;
+        }
+      }
+
+      // Add to empty slots
+      for (let i = 0; i < 36; i++) {
+        if (!player.inventory[i] && count > 0) {
+          const addCount = Math.min(count, item.stackSize);
+          player.inventory[i] = { id: itemId, count: addCount };
+          count -= addCount;
+        }
+      }
+
+      updateInventoryDisplay();
+    }
+
+    function updateInventoryDisplay() {
+      const slots = inventoryGrid.children;
+      for (let i = 0; i < 36; i++) {
+        const slot = slots[i];
+        const item = player.inventory[i];
+        if (item) {
+          slot.textContent = `${itemTextures[item.id]} ${item.count}`;
+          slot.style.background = `rgba(100, 100, 100, 0.5)`;
+        } else {
+          slot.textContent = '';
+          slot.style.background = 'rgba(255, 255, 255, 0.1)';
+        }
+      }
+
+      // Update crafting grid
+      const craftingSlots = craftingGrid.children;
+      for (let i = 0; i < 9; i++) {
+        const slot = craftingSlots[i];
+        const item = player.craftingGrid[i];
+        if (item) {
+          slot.textContent = `${itemTextures[item.id]} ${item.count}`;
+          slot.style.background = `rgba(100, 100, 100, 0.5)`;
+        } else {
+          slot.textContent = '';
+          slot.style.background = 'rgba(255, 255, 255, 0.1)';
+        }
+      }
+
+      // Check crafting result
+      updateCraftingResult();
+    }
+
+    function updateCraftingResult() {
+      const craftingPattern = [];
+      for (let i = 0; i < 9; i++) {
+        craftingPattern[i] = player.craftingGrid[i]?.id || null;
+      }
+
+      let result = null;
+      for (const [recipeName, pattern] of Object.entries(recipes)) {
+        if (arraysEqual(craftingPattern, pattern.flat())) {
+          result = recipeName;
+          break;
+        }
+      }
+
+      if (result) {
+        craftingResult.textContent = itemTextures[result];
+        craftingResult.style.background = `rgba(100, 100, 100, 0.5)`;
+        craftingResult.onclick = () => craftItem(result);
+      } else {
+        craftingResult.textContent = '';
+        craftingResult.style.background = 'rgba(255, 255, 255, 0.1)';
+        craftingResult.onclick = null;
+      }
+    }
+
+    function craftItem(itemId) {
+      // Remove ingredients
+      const recipe = recipes[itemId];
+      for (let i = 0; i < 9; i++) {
+        if (recipe.flat()[i]) {
+          player.craftingGrid[i].count--;
+          if (player.craftingGrid[i].count <= 0) {
+            player.craftingGrid[i] = null;
+          }
+        }
+      }
+
+      // Add result to inventory
+      addItemToInventory(itemId, 1);
+      updateInventoryDisplay();
+    }
+
+    function arraysEqual(a, b) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
+      }
+      return true;
+    }
+
+    function selectInventorySlot(slotIndex) {
+      player.selectedSlot = slotIndex;
+      updateInventoryDisplay();
+    }
+
+    function selectCraftingSlot(slotIndex) {
+      // For now, just log - we'll implement drag and drop later
+      console.log('Selected crafting slot:', slotIndex);
+    }
+
+    function getSelectedItem() {
+      return player.inventory[player.selectedSlot];
     }
 
     function startGame() {
@@ -242,97 +640,22 @@
         for (let z = 0; z < CHUNK_SIZE; z++) {
           const worldX = chunkX * CHUNK_SIZE + x;
           const worldZ = chunkZ * CHUNK_SIZE + z;
-          // Flat platform: grass at y=10, dirt below
-          for (let y = 0; y <= 10; y++) {
+
+          // Generate terrain with ores
+          const height = Math.floor(Math.random() * 3) + 10;
+          for (let y = 0; y < height; y++) {
             let blockType = 'dirt';
-            if (y === 10) blockType = 'grass';
+            if (y === height - 1) blockType = 'grass';
+            if (y > height - 4 && Math.random() < 0.1) blockType = 'stone';
+            if (y < height - 5 && Math.random() < 0.05) {
+              if (y < 20) blockType = Math.random() < 0.3 ? 'coal_ore' : 'iron_ore';
+              else if (y < 15) blockType = Math.random() < 0.1 ? 'gold_ore' : 'iron_ore';
+              else if (y < 10) blockType = Math.random() < 0.05 ? 'diamond_ore' : 'coal_ore';
+            }
             placeBlock(worldX, y, worldZ, blockType);
           }
         }
       }
-    }
-
-    function updateChunks() {
-      const playerChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
-      const playerChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
-
-      // Only load chunks within render distance
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dz = -1; dz <= 1; dz++) {
-          generateChunk(playerChunkX + dx, playerChunkZ + dz);
-        }
-      }
-    }
-
-    function spawnMobs() {
-      const mobTypes = ['pig', 'sheep', 'cow', 'chicken'];
-      for (let i = 0; i < 20; i++) {
-        const type = mobTypes[Math.floor(Math.random() * mobTypes.length)];
-        const x = (Math.random() - 0.5) * 100;
-        const z = (Math.random() - 0.5) * 100;
-        const y = 12; // On ground level
-        createMob(type, x, y, z);
-      }
-    }
-
-    function createMob(type, x, y, z) {
-      const geometry = new THREE.BoxGeometry(1, 1, 1);
-      const material = new THREE.MeshLambertMaterial({ color: getMobColor(type) });
-      const mob = new THREE.Mesh(geometry, material);
-      mob.position.set(x, y, z);
-      mob.userData = { type, velocity: new THREE.Vector3(), targetX: x, targetZ: z, moveTimer: 0 };
-      scene.add(mob);
-      mobs.push(mob);
-    }
-
-    function getMobColor(type) {
-      const colors = {
-        pig: 0xFF69B4,
-        sheep: 0xFFFFFF,
-        cow: 0x8B4513,
-        chicken: 0xFFFF00
-      };
-      return colors[type] || 0xFF0000;
-    }
-
-    function updateMobs(delta) {
-      mobs.forEach(mob => {
-        // Simple AI: move towards random targets
-        mob.userData.moveTimer -= delta;
-        if (mob.userData.moveTimer <= 0) {
-          mob.userData.targetX = mob.position.x + (Math.random() - 0.5) * 20;
-          mob.userData.targetZ = mob.position.z + (Math.random() - 0.5) * 20;
-          mob.userData.moveTimer = Math.random() * 3000 + 1000; // 1-4 seconds
-        }
-
-        // Move towards target
-        const dx = mob.userData.targetX - mob.position.x;
-        const dz = mob.userData.targetZ - mob.position.z;
-        const dist = Math.sqrt(dx * dx + dz * dz);
-        if (dist > 0.1) {
-          mob.userData.velocity.x = (dx / dist) * 2;
-          mob.userData.velocity.z = (dz / dist) * 2;
-        } else {
-          mob.userData.velocity.x = 0;
-          mob.userData.velocity.z = 0;
-        }
-
-        mob.position.x += mob.userData.velocity.x * delta * 0.001;
-        mob.position.z += mob.userData.velocity.z * delta * 0.001;
-
-        // Keep on ground
-        const groundY = getGroundHeight(mob.position.x, mob.position.z);
-        mob.position.y = groundY + 0.5;
-      });
-    }
-
-    function getGroundHeight(x, z) {
-      for (let y = WORLD_HEIGHT; y >= 0; y--) {
-        if (world[`${Math.floor(x)},${y},${Math.floor(z)}`]) {
-          return y + 1;
-        }
-      }
-      return 10; // Default ground level
     }
 
     function placeBlock(x, y, z, type) {
@@ -342,41 +665,62 @@
       }
 
       const geometry = new THREE.BoxGeometry(1, 1, 1);
-      const material = blockMaterials[type];
+      const material = blockMaterials[type] || blockMaterials.stone;
       const cube = new THREE.Mesh(geometry, material);
       cube.position.set(x, y, z);
       cube.castShadow = true;
       cube.receiveShadow = true;
 
-      // Add wireframe edges
+      // Add wireframe edges for block outlines
       const edges = new THREE.EdgesGeometry(geometry);
-      const lineMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2 });
+      const lineMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1 });
       const wireframe = new THREE.LineSegments(edges, lineMaterial);
       cube.add(wireframe);
 
       scene.add(cube);
-      world[key] = cube;
+      world[key] = { mesh: cube, type: type };
     }
 
     function removeBlock(x, y, z) {
       const key = `${x},${y},${z}`;
       if (world[key]) {
-        scene.remove(world[key]);
+        scene.remove(world[key].mesh);
         delete world[key];
       }
     }
 
-    function getBlockAt(x, y, z) {
+    function breakBlock(x, y, z) {
       const key = `${x},${y},${z}`;
-      return world[key] ? key : null;
-    }
+      if (world[key]) {
+        const blockType = world[key].type;
+        const properties = blockProperties[blockType];
 
-    function selectBlock(type) {
-      selectedBlock = type;
-      selectedBlockEl.textContent = type.charAt(0).toUpperCase() + type.slice(1);
-      blockItems.forEach(item => {
-        item.classList.toggle('selected', item.dataset.block === type);
-      });
+        if (properties) {
+          // Check if player has appropriate tool
+          const selectedItem = getSelectedItem();
+          let miningSpeed = 1;
+
+          if (selectedItem && items[selectedItem.id] && items[selectedItem.id].type === 'tool') {
+            const tool = items[selectedItem.id];
+            if (tool.toolType === properties.tool) {
+              miningSpeed = toolMaterials[tool.material].multiplier;
+            }
+          }
+
+          // Drop the block/item
+          const dropItem = properties.drops || blockType;
+          addItemToInventory(dropItem, 1);
+
+          // Give experience
+          player.experience += 1;
+          if (player.experience >= player.level * 10) {
+            player.level += 1;
+            player.experience = 0;
+          }
+        }
+
+        removeBlock(x, y, z);
+      }
     }
 
     function onKeyDown(event) {
@@ -403,120 +747,34 @@
             canJump = false;
           }
           break;
-      }
-    }
-
-    function onKeyUp(event) {
-      switch (event.code) {
-        case 'ArrowUp':
-        case 'KeyW':
-          moveForward = false;
+        case 'KeyE':
+          toggleInventory();
           break;
-        case 'ArrowLeft':
-        case 'KeyA':
-          moveLeft = false;
-          break;
-        case 'ArrowDown':
-        case 'KeyS':
-          moveBackward = false;
-          break;
-        case 'ArrowRight':
-        case 'KeyD':
-          moveRight = false;
+        case 'Digit1':
+        case 'Digit2':
+        case 'Digit3':
+        case 'Digit4':
+        case 'Digit5':
+        case 'Digit6':
+        case 'Digit7':
+        case 'Digit8':
+        case 'Digit9':
+          player.selectedSlot = parseInt(event.code.slice(-1)) - 1;
+          updateUI();
           break;
       }
     }
 
-    function onMouseClick(event) {
-      if (!isLocked) return;
-
-      const raycaster = new THREE.Raycaster();
-      const mouse = new THREE.Vector2();
-      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-      raycaster.setFromCamera(mouse, camera);
-
-      const intersects = raycaster.intersectObjects(Object.values(world));
-      if (intersects.length > 0) {
-        const intersect = intersects[0];
-        const point = intersect.point;
-        const normal = intersect.face.normal;
-
-        const blockPos = new THREE.Vector3(
-          Math.floor(point.x + normal.x * 0.5),
-          Math.floor(point.y + normal.y * 0.5),
-          Math.floor(point.z + normal.z * 0.5)
-        );
-
-        removeBlock(blockPos.x, blockPos.y, blockPos.z);
-      }
+    function toggleInventory() {
+      inventoryOpen = !inventoryOpen;
+      fullInventory.style.display = inventoryOpen ? 'block' : 'none';
+      isLocked = !inventoryOpen;
     }
 
-    function onRightClick(event) {
-      event.preventDefault();
-      if (!isLocked) return;
-
-      const raycaster = new THREE.Raycaster();
-      const mouse = new THREE.Vector2();
-      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-      raycaster.setFromCamera(mouse, camera);
-
-      const intersects = raycaster.intersectObjects(Object.values(world));
-      if (intersects.length > 0) {
-        const intersect = intersects[0];
-        const point = intersect.point;
-        const normal = intersect.face.normal;
-
-        const blockPos = new THREE.Vector3(
-          Math.floor(point.x + normal.x * 0.5),
-          Math.floor(point.y + normal.y * 0.5),
-          Math.floor(point.z + normal.z * 0.5)
-        );
-
-        placeBlock(blockPos.x, blockPos.y, blockPos.z, selectedBlock);
-      }
-    }
-
-    function onMouseMove(event) {
-      if (!isLocked) {
-        // Update previous mouse position even when not locked
-        prevMouseX = event.clientX;
-        prevMouseY = event.clientY;
-        return;
-      }
-
-      const currentMouseX = event.clientX;
-      const currentMouseY = event.clientY;
-
-      const deltaX = currentMouseX - prevMouseX;
-      const deltaY = currentMouseY - prevMouseY;
-
-      prevMouseX = currentMouseX;
-      prevMouseY = currentMouseY;
-
-      const sensitivity = 0.002;
-      yaw -= deltaX * sensitivity;
-      pitch -= deltaY * sensitivity;
-
-      pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
-    }
-
-    function onWheel(event) {
-      const blockTypes = ['grass', 'dirt', 'stone', 'wood', 'sand'];
-      let currentIndex = blockTypes.indexOf(selectedBlock);
-      if (event.deltaY > 0) {
-        currentIndex = (currentIndex + 1) % blockTypes.length;
-      } else {
-        currentIndex = (currentIndex - 1 + blockTypes.length) % blockTypes.length;
-      }
-      selectBlock(blockTypes[currentIndex]);
-    }
-
-    function onWindowResize() {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
+    function updateUI() {
+      selectedBlockEl.textContent = getSelectedItem()?.id || 'None';
+      updateInventoryDisplay();
+      updateHealthBar();
     }
 
     function animate() {
@@ -525,6 +783,12 @@
       const time = performance.now();
       const delta = time - prevTime;
       prevTime = time;
+
+      // Update day/night cycle
+      dayTime += delta * 0.001;
+      const dayProgress = (dayTime % 24000) / 24000; // 24 second day cycle
+      const lightIntensity = Math.max(0.1, Math.sin(dayProgress * Math.PI * 2));
+      scene.children[1].intensity = lightIntensity; // Update directional light
 
       if (isLocked) {
         // Update camera rotation
@@ -579,5 +843,220 @@
       renderer.render(scene, camera);
     }
 
+    function onKeyUp(event) {
+      switch (event.code) {
+        case 'ArrowUp':
+        case 'KeyW':
+          moveForward = false;
+          break;
+        case 'ArrowLeft':
+        case 'KeyA':
+          moveLeft = false;
+          break;
+        case 'ArrowDown':
+        case 'KeyS':
+          moveBackward = false;
+          break;
+        case 'ArrowRight':
+        case 'KeyD':
+          moveRight = false;
+          break;
+      }
+    }
+
+    function onMouseClick(event) {
+      if (!isLocked || inventoryOpen) return;
+
+      const raycaster = new THREE.Raycaster();
+      const mouse = new THREE.Vector2();
+      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+
+      const intersects = raycaster.intersectObjects(Object.values(world).map(b => b.mesh));
+      if (intersects.length > 0) {
+        const intersect = intersects[0];
+        const point = intersect.point;
+        const normal = intersect.face.normal;
+
+        const blockPos = new THREE.Vector3(
+          Math.floor(point.x + normal.x * 0.5),
+          Math.floor(point.y + normal.y * 0.5),
+          Math.floor(point.z + normal.z * 0.5)
+        );
+
+        breakBlock(blockPos.x, blockPos.y, blockPos.z);
+      }
+    }
+
+    function onRightClick(event) {
+      event.preventDefault();
+      if (!isLocked || inventoryOpen) return;
+
+      const raycaster = new THREE.Raycaster();
+      const mouse = new THREE.Vector2();
+      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+
+      const intersects = raycaster.intersectObjects(Object.values(world).map(b => b.mesh));
+      if (intersects.length > 0) {
+        const intersect = intersects[0];
+        const point = intersect.point;
+        const normal = intersect.face.normal;
+
+        const blockPos = new THREE.Vector3(
+          Math.floor(point.x + normal.x * 0.5),
+          Math.floor(point.y + normal.y * 0.5),
+          Math.floor(point.z + normal.z * 0.5)
+        );
+
+        const selectedItem = getSelectedItem();
+        if (selectedItem && items[selectedItem.id] && items[selectedItem.id].type === 'block') {
+          placeBlock(blockPos.x, blockPos.y, blockPos.z, selectedItem.id);
+          selectedItem.count--;
+          if (selectedItem.count <= 0) {
+            player.inventory[player.selectedSlot] = null;
+          }
+          updateInventoryDisplay();
+        }
+      }
+    }
+
+    function onMouseMove(event) {
+      if (!isLocked) {
+        prevMouseX = event.clientX;
+        prevMouseY = event.clientY;
+        return;
+      }
+
+      const currentMouseX = event.clientX;
+      const currentMouseY = event.clientY;
+
+      const deltaX = currentMouseX - prevMouseX;
+      const deltaY = currentMouseY - prevMouseY;
+
+      prevMouseX = currentMouseX;
+      prevMouseY = currentMouseY;
+
+      const sensitivity = 0.002;
+      yaw -= deltaX * sensitivity;
+      pitch -= deltaY * sensitivity;
+
+      pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
+    }
+
+    function onWheel(event) {
+      if (inventoryOpen) return;
+      player.selectedSlot = (player.selectedSlot + (event.deltaY > 0 ? 1 : -1) + 9) % 9;
+      updateUI();
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function updateChunks() {
+      const playerChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
+      const playerChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
+
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          generateChunk(playerChunkX + dx, playerChunkZ + dz);
+        }
+      }
+    }
+
+    function spawnMobs() {
+      const mobTypes = ['pig', 'sheep', 'cow', 'chicken'];
+      for (let i = 0; i < 20; i++) {
+        const type = mobTypes[Math.floor(Math.random() * mobTypes.length)];
+        const x = (Math.random() - 0.5) * 100;
+        const z = (Math.random() - 0.5) * 100;
+        const y = 12;
+        createMob(type, x, y, z);
+      }
+    }
+
+    function createMob(type, x, y, z) {
+      const geometry = new THREE.BoxGeometry(1, 1, 1);
+      const material = new THREE.MeshLambertMaterial({ color: getMobColor(type) });
+      const mob = new THREE.Mesh(geometry, material);
+      mob.position.set(x, y, z);
+      mob.userData = { type, velocity: new THREE.Vector3(), targetX: x, targetZ: z, moveTimer: 0 };
+      scene.add(mob);
+      mobs.push(mob);
+    }
+
+    function getMobColor(type) {
+      const colors = {
+        pig: 0xFF69B4,
+        sheep: 0xFFFFFF,
+        cow: 0x8B4513,
+        chicken: 0xFFFF00
+      };
+      return colors[type] || 0xFF0000;
+    }
+
+    function updateMobs(delta) {
+      mobs.forEach(mob => {
+        mob.userData.moveTimer -= delta;
+        if (mob.userData.moveTimer <= 0) {
+          mob.userData.targetX = mob.position.x + (Math.random() - 0.5) * 20;
+          mob.userData.targetZ = mob.position.z + (Math.random() - 0.5) * 20;
+          mob.userData.moveTimer = Math.random() * 3000 + 1000;
+        }
+
+        const dx = mob.userData.targetX - mob.position.x;
+        const dz = mob.userData.targetZ - mob.position.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist > 0.1) {
+          mob.userData.velocity.x = (dx / dist) * 2;
+          mob.userData.velocity.z = (dz / dist) * 2;
+        } else {
+          mob.userData.velocity.x = 0;
+          mob.userData.velocity.z = 0;
+        }
+
+        mob.position.x += mob.userData.velocity.x * delta * 0.001;
+        mob.position.z += mob.userData.velocity.z * delta * 0.001;
+
+        const groundY = getGroundHeight(mob.position.x, mob.position.z);
+        mob.position.y = groundY + 0.5;
+      });
+    }
+
+    function getGroundHeight(x, z) {
+      for (let y = WORLD_HEIGHT; y >= 0; y--) {
+        if (world[`${Math.floor(x)},${y},${Math.floor(z)}`]) {
+          return y + 1;
+        }
+      }
+      return 10;
+    }
+
+    // Initialize variables
+    let scene, camera, renderer, controls;
+    let world = {};
+    let selectedSlot = 0;
+    let isLocked = false;
+    let inventoryOpen = false;
+    let velocity = new THREE.Vector3();
+    let direction = new THREE.Vector3();
+    let prevTime = performance.now();
+    let mobs = [];
+    let dayTime = 0;
+    let yaw = 0;
+    let pitch = 0;
+    let moveForward = false;
+    let moveBackward = false;
+    let moveLeft = false;
+    let moveRight = false;
+    let canJump = true;
+
     init();
   </script>
+</body>
+</html>
