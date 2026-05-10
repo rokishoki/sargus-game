@@ -143,13 +143,11 @@
     const startButton = document.getElementById('startButton');
     const blockItems = document.querySelectorAll('.block-item');
 
-    let scene, camera, renderer, controls;
-    let world = {};
-    let selectedBlock = 'grass';
-    let isLocked = false;
-
-    const CHUNK_SIZE = 16;
-    const WORLD_HEIGHT = 64;
+    let moveForward = false;
+    let moveBackward = false;
+    let moveLeft = false;
+    let moveRight = false;
+    let canJump = false;
 
     const blockMaterials = {
       grass: new THREE.MeshLambertMaterial({ color: 0x228B22 }),
@@ -174,9 +172,6 @@
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-      // Controls
-      controls = new THREE.PointerLockControls(camera, document.body);
-
       // Lighting
       const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
       scene.add(ambientLight);
@@ -188,12 +183,16 @@
       directionalLight.shadow.mapSize.height = 2048;
       scene.add(directionalLight);
 
-      // Generate world
-      generateWorld();
+      // Generate initial world
+      generateChunk(0, 0);
+
+      // Add mobs
+      spawnMobs();
 
       // Event listeners
       startButton.addEventListener('click', startGame);
       document.addEventListener('keydown', onKeyDown);
+      document.addEventListener('keyup', onKeyUp);
       document.addEventListener('click', onMouseClick);
       document.addEventListener('contextmenu', onRightClick);
       document.addEventListener('wheel', onWheel);
@@ -208,21 +207,110 @@
 
     function startGame() {
       instructions.style.display = 'none';
-      controls.lock();
+      isLocked = true;
+      ui.style.display = 'block';
+      prevTime = performance.now();
     }
 
-    function generateWorld() {
-      for (let x = -CHUNK_SIZE; x < CHUNK_SIZE; x++) {
-        for (let z = -CHUNK_SIZE; z < CHUNK_SIZE; z++) {
-          const height = Math.floor(Math.random() * 5) + 10;
-          for (let y = 0; y < height; y++) {
+    function generateChunk(chunkX, chunkZ) {
+      const chunkKey = `${chunkX},${chunkZ}`;
+      if (loadedChunks.has(chunkKey)) return;
+      loadedChunks.add(chunkKey);
+
+      for (let x = 0; x < CHUNK_SIZE; x++) {
+        for (let z = 0; z < CHUNK_SIZE; z++) {
+          const worldX = chunkX * CHUNK_SIZE + x;
+          const worldZ = chunkZ * CHUNK_SIZE + z;
+          // Flat platform: grass at y=10, dirt below
+          for (let y = 0; y <= 10; y++) {
             let blockType = 'dirt';
-            if (y === height - 1) blockType = 'grass';
-            if (Math.random() < 0.1 && y > height - 3) blockType = 'stone';
-            placeBlock(x, y, z, blockType);
+            if (y === 10) blockType = 'grass';
+            placeBlock(worldX, y, worldZ, blockType);
           }
         }
       }
+    }
+
+    function updateChunks() {
+      const playerChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
+      const playerChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
+
+      for (let dx = -2; dx <= 2; dx++) {
+        for (let dz = -2; dz <= 2; dz++) {
+          generateChunk(playerChunkX + dx, playerChunkZ + dz);
+        }
+      }
+    }
+
+    function spawnMobs() {
+      const mobTypes = ['pig', 'sheep', 'cow', 'chicken'];
+      for (let i = 0; i < 20; i++) {
+        const type = mobTypes[Math.floor(Math.random() * mobTypes.length)];
+        const x = (Math.random() - 0.5) * 100;
+        const z = (Math.random() - 0.5) * 100;
+        const y = 12; // On ground level
+        createMob(type, x, y, z);
+      }
+    }
+
+    function createMob(type, x, y, z) {
+      const geometry = new THREE.BoxGeometry(1, 1, 1);
+      const material = new THREE.MeshLambertMaterial({ color: getMobColor(type) });
+      const mob = new THREE.Mesh(geometry, material);
+      mob.position.set(x, y, z);
+      mob.userData = { type, velocity: new THREE.Vector3(), targetX: x, targetZ: z, moveTimer: 0 };
+      scene.add(mob);
+      mobs.push(mob);
+    }
+
+    function getMobColor(type) {
+      const colors = {
+        pig: 0xFF69B4,
+        sheep: 0xFFFFFF,
+        cow: 0x8B4513,
+        chicken: 0xFFFF00
+      };
+      return colors[type] || 0xFF0000;
+    }
+
+    function updateMobs(delta) {
+      mobs.forEach(mob => {
+        // Simple AI: move towards random targets
+        mob.userData.moveTimer -= delta;
+        if (mob.userData.moveTimer <= 0) {
+          mob.userData.targetX = mob.position.x + (Math.random() - 0.5) * 20;
+          mob.userData.targetZ = mob.position.z + (Math.random() - 0.5) * 20;
+          mob.userData.moveTimer = Math.random() * 3000 + 1000; // 1-4 seconds
+        }
+
+        // Move towards target
+        const dx = mob.userData.targetX - mob.position.x;
+        const dz = mob.userData.targetZ - mob.position.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist > 0.1) {
+          mob.userData.velocity.x = (dx / dist) * 2;
+          mob.userData.velocity.z = (dz / dist) * 2;
+        } else {
+          mob.userData.velocity.x = 0;
+          mob.userData.velocity.z = 0;
+        }
+
+        mob.position.x += mob.userData.velocity.x * delta * 0.001;
+        mob.position.z += mob.userData.velocity.z * delta * 0.001;
+
+        // Keep on ground
+        const groundY = getGroundHeight(mob.position.x, mob.position.z);
+        mob.position.y = groundY + 0.5;
+      });
+    }
+
+    function getGroundHeight(x, z) {
+      for (let y = WORLD_HEIGHT; y >= 0; y--) {
+        if (world[`${Math.floor(x)},${y},${Math.floor(z)}`]) {
+          return y + 1;
+        }
+      }
+      return 10; // Default ground level
     }
 
     function placeBlock(x, y, z, type) {
@@ -263,14 +351,61 @@
     }
 
     function onKeyDown(event) {
-      // Movement is handled by PointerLockControls
+      switch (event.code) {
+        case 'ArrowUp':
+        case 'KeyW':
+          moveForward = true;
+          break;
+        case 'ArrowLeft':
+        case 'KeyA':
+          moveLeft = true;
+          break;
+        case 'ArrowDown':
+        case 'KeyS':
+          moveBackward = true;
+          break;
+        case 'ArrowRight':
+        case 'KeyD':
+          moveRight = true;
+          break;
+        case 'Space':
+          if (canJump) {
+            velocity.y += JUMP_FORCE;
+            canJump = false;
+          }
+          break;
+      }
+    }
+
+    function onKeyUp(event) {
+      switch (event.code) {
+        case 'ArrowUp':
+        case 'KeyW':
+          moveForward = false;
+          break;
+        case 'ArrowLeft':
+        case 'KeyA':
+          moveLeft = false;
+          break;
+        case 'ArrowDown':
+        case 'KeyS':
+          moveBackward = false;
+          break;
+        case 'ArrowRight':
+        case 'KeyD':
+          moveRight = false;
+          break;
+      }
     }
 
     function onMouseClick(event) {
       if (!isLocked) return;
 
       const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      const mouse = new THREE.Vector2();
+      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
 
       const intersects = raycaster.intersectObjects(Object.values(world));
       if (intersects.length > 0) {
@@ -293,7 +428,10 @@
       if (!isLocked) return;
 
       const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      const mouse = new THREE.Vector2();
+      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
 
       const intersects = raycaster.intersectObjects(Object.values(world));
       if (intersects.length > 0) {
@@ -330,6 +468,46 @@
 
     function animate() {
       requestAnimationFrame(animate);
+
+      const time = performance.now();
+      const delta = time - prevTime;
+      prevTime = time;
+
+      if (isLocked) {
+        // Movement
+        direction.z = Number(moveForward) - Number(moveBackward);
+        direction.x = Number(moveRight) - Number(moveLeft);
+        direction.normalize();
+
+        if (moveForward || moveBackward) velocity.z -= direction.z * MOVE_SPEED * delta * 0.001;
+        if (moveLeft || moveRight) velocity.x -= direction.x * MOVE_SPEED * delta * 0.001;
+
+        // Apply friction
+        velocity.x *= 0.8;
+        velocity.z *= 0.8;
+
+        // Apply gravity
+        velocity.y += GRAVITY * delta * 0.001;
+
+        // Move camera
+        camera.position.x += velocity.x * delta * 0.001;
+        camera.position.y += velocity.y * delta * 0.001;
+        camera.position.z += velocity.z * delta * 0.001;
+
+        // Ground collision
+        const groundY = getGroundHeight(camera.position.x, camera.position.z);
+        if (camera.position.y <= groundY + 1.5) {
+          velocity.y = 0;
+          camera.position.y = groundY + 1.5;
+          canJump = true;
+        }
+
+        // Update chunks
+        updateChunks();
+
+        // Update mobs
+        updateMobs(delta);
+      }
 
       // Update position display
       positionEl.textContent = `${Math.round(camera.position.x)}, ${Math.round(camera.position.y)}, ${Math.round(camera.position.z)}`;
