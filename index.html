@@ -116,11 +116,7 @@
     <p>WASD to move, Mouse to look around</p>
     <p>Left click to break blocks, Right click to place</p>
     <p>Scroll to change block type</p>
-    <button id="startButton">Start Game</button>
-  </div>
-
-  <canvas id="gameCanvas"></canvas>
-
+      <p>Click anywhere on the game area to start looking around</p>
   <div id="ui">
     <div>Position: <span id="position">0, 0, 0</span></div>
     <div>Block: <span id="selectedBlock">Grass</span></div>
@@ -147,10 +143,10 @@
     const startButton = document.getElementById('startButton');
     const blockItems = document.querySelectorAll('.block-item');
 
-    let mouseX = 0;
-    let mouseY = 0;
-    let pitch = 0;
-    let yaw = 0;
+    let mouseX = window.innerWidth / 2;
+    let mouseY = window.innerHeight / 2;
+    let prevMouseX = window.innerWidth / 2;
+    let prevMouseY = window.innerHeight / 2;
 
     const CHUNK_SIZE = 16;
     const WORLD_HEIGHT = 64;
@@ -224,11 +220,17 @@
     }
 
     function startGame() {
+      console.log('Start game clicked');
       instructions.style.display = 'none';
       document.body.classList.add('game-active');
       isLocked = true;
       ui.style.display = 'block';
       prevTime = performance.now();
+
+      // Reset mouse position tracking
+      prevMouseX = window.innerWidth / 2;
+      prevMouseY = window.innerHeight / 2;
+      console.log('Game started, isLocked:', isLocked);
     }
 
     function generateChunk(chunkX, chunkZ) {
@@ -477,14 +479,25 @@
     }
 
     function onMouseMove(event) {
-      if (!isLocked) return;
+      if (!isLocked) {
+        // Update previous mouse position even when not locked
+        prevMouseX = event.clientX;
+        prevMouseY = event.clientY;
+        return;
+      }
+
+      const currentMouseX = event.clientX;
+      const currentMouseY = event.clientY;
+
+      const deltaX = currentMouseX - prevMouseX;
+      const deltaY = currentMouseY - prevMouseY;
+
+      prevMouseX = currentMouseX;
+      prevMouseY = currentMouseY;
 
       const sensitivity = 0.002;
-      mouseX = event.movementX || 0;
-      mouseY = event.movementY || 0;
-
-      yaw -= mouseX * sensitivity;
-      pitch -= mouseY * sensitivity;
+      yaw -= deltaX * sensitivity;
+      pitch -= deltaY * sensitivity;
 
       pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
     }
