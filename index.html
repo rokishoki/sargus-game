@@ -35,6 +35,7 @@
       height: 20px;
       transform: translate(-50%, -50%);
       pointer-events: none;
+      z-index: 10;
     }
 
     #crosshair::before,
@@ -54,6 +55,10 @@
       width: 20px;
       height: 2px;
       top: 9px;
+    }
+
+    .game-active {
+      cursor: none;
     }
 
     #inventory {
@@ -132,7 +137,6 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
 
   <script>
     const canvas = document.getElementById('gameCanvas');
@@ -143,14 +147,10 @@
     const startButton = document.getElementById('startButton');
     const blockItems = document.querySelectorAll('.block-item');
 
-    let scene, camera, renderer, controls;
-    let world = {};
-    let selectedBlock = 'grass';
-    let isLocked = false;
-    let velocity = new THREE.Vector3();
-    let direction = new THREE.Vector3();
-    let prevTime = performance.now();
-    let mobs = [];
+    let mouseX = 0;
+    let mouseY = 0;
+    let pitch = 0;
+    let yaw = 0;
 
     const CHUNK_SIZE = 16;
     const WORLD_HEIGHT = 64;
@@ -177,8 +177,9 @@
       camera.position.set(0, 20, 0);
 
       // Renderer
-      renderer = new THREE.WebGLRenderer({ canvas });
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
       renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -189,8 +190,14 @@
       const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
       directionalLight.position.set(50, 50, 50);
       directionalLight.castShadow = true;
-      directionalLight.shadow.mapSize.width = 2048;
-      directionalLight.shadow.mapSize.height = 2048;
+      directionalLight.shadow.mapSize.width = 1024;
+      directionalLight.shadow.mapSize.height = 1024;
+      directionalLight.shadow.camera.near = 0.5;
+      directionalLight.shadow.camera.far = 200;
+      directionalLight.shadow.camera.left = -50;
+      directionalLight.shadow.camera.right = 50;
+      directionalLight.shadow.camera.top = 50;
+      directionalLight.shadow.camera.bottom = -50;
       scene.add(directionalLight);
 
       // Generate initial world
@@ -206,6 +213,7 @@
       document.addEventListener('click', onMouseClick);
       document.addEventListener('contextmenu', onRightClick);
       document.addEventListener('wheel', onWheel);
+      document.addEventListener('mousemove', onMouseMove);
       window.addEventListener('resize', onWindowResize);
 
       blockItems.forEach(item => {
@@ -217,6 +225,7 @@
 
     function startGame() {
       instructions.style.display = 'none';
+      document.body.classList.add('game-active');
       isLocked = true;
       ui.style.display = 'block';
       prevTime = performance.now();
@@ -245,8 +254,9 @@
       const playerChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
       const playerChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
 
-      for (let dx = -2; dx <= 2; dx++) {
-        for (let dz = -2; dz <= 2; dz++) {
+      // Only load chunks within render distance
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
           generateChunk(playerChunkX + dx, playerChunkZ + dz);
         }
       }
@@ -335,6 +345,13 @@
       cube.position.set(x, y, z);
       cube.castShadow = true;
       cube.receiveShadow = true;
+
+      // Add wireframe edges
+      const edges = new THREE.EdgesGeometry(geometry);
+      const lineMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2 });
+      const wireframe = new THREE.LineSegments(edges, lineMaterial);
+      cube.add(wireframe);
+
       scene.add(cube);
       world[key] = cube;
     }
@@ -459,6 +476,19 @@
       }
     }
 
+    function onMouseMove(event) {
+      if (!isLocked) return;
+
+      const sensitivity = 0.002;
+      mouseX = event.movementX || 0;
+      mouseY = event.movementY || 0;
+
+      yaw -= mouseX * sensitivity;
+      pitch -= mouseY * sensitivity;
+
+      pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
+    }
+
     function onWheel(event) {
       const blockTypes = ['grass', 'dirt', 'stone', 'wood', 'sand'];
       let currentIndex = blockTypes.indexOf(selectedBlock);
@@ -484,17 +514,28 @@
       prevTime = time;
 
       if (isLocked) {
+        // Update camera rotation
+        camera.rotation.order = 'YXZ';
+        camera.rotation.y = yaw;
+        camera.rotation.x = pitch;
+
         // Movement
-        direction.z = Number(moveForward) - Number(moveBackward);
-        direction.x = Number(moveRight) - Number(moveLeft);
+        direction.set(0, 0, 0);
+        if (moveForward) direction.z -= 1;
+        if (moveBackward) direction.z += 1;
+        if (moveLeft) direction.x -= 1;
+        if (moveRight) direction.x += 1;
+
+        direction.applyEuler(new THREE.Euler(0, yaw, 0));
         direction.normalize();
 
-        if (moveForward || moveBackward) velocity.z -= direction.z * MOVE_SPEED * delta * 0.001;
-        if (moveLeft || moveRight) velocity.x -= direction.x * MOVE_SPEED * delta * 0.001;
-
-        // Apply friction
-        velocity.x *= 0.8;
-        velocity.z *= 0.8;
+        if (moveForward || moveBackward || moveLeft || moveRight) {
+          velocity.x = direction.x * MOVE_SPEED;
+          velocity.z = direction.z * MOVE_SPEED;
+        } else {
+          velocity.x *= 0.8;
+          velocity.z *= 0.8;
+        }
 
         // Apply gravity
         velocity.y += GRAVITY * delta * 0.001;
@@ -524,16 +565,6 @@
 
       renderer.render(scene, camera);
     }
-
-    // Pointer lock events
-    document.addEventListener('pointerlockchange', () => {
-      isLocked = document.pointerLockElement === document.body;
-      if (isLocked) {
-        ui.style.display = 'block';
-      } else {
-        ui.style.display = 'none';
-      }
-    });
 
     init();
   </script>
