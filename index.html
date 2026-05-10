@@ -13,29 +13,134 @@
     }
 
     #gameCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
       display: block;
+      background: #000;
+    }
+
+    #startScreen {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(5, 5, 5, 0.95), rgba(20, 20, 20, 0.95));
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .start-panel {
+      width: min(480px, 100%);
+      background: rgba(30, 30, 30, 0.98);
+      border: 2px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.7);
+      color: white;
+      text-align: center;
+    }
+
+    .start-title {
+      font-size: 48px;
+      letter-spacing: 0.2em;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+
+    .start-subtitle {
+      font-size: 18px;
+      color: #ddd;
+      margin-bottom: 20px;
+    }
+
+    .start-form {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .field-label {
+      display: block;
+      text-align: left;
+      font-size: 12px;
+      color: #ccc;
+      margin-bottom: 4px;
+    }
+
+    .start-form input,
+    .start-form select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      outline: none;
+      font-size: 14px;
+    }
+
+    .start-form button {
+      width: 100%;
+      padding: 14px 16px;
+      border: none;
+      border-radius: 8px;
+      background: #4caf50;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+
+    .start-form button:hover {
+      background: #57b15d;
+    }
+
+    .start-notes {
+      font-size: 13px;
+      color: #bbb;
+      line-height: 1.5;
     }
 
     #ui {
       position: absolute;
-      top: 10px;
-      left: 10px;
+      top: 16px;
+      left: 16px;
       color: white;
       background: rgba(0, 0, 0, 0.5);
-      padding: 10px;
-      border-radius: 5px;
+      padding: 10px 14px;
+      border-radius: 8px;
       font-size: 14px;
+      display: none;
+      z-index: 20;
+      min-width: 220px;
+    }
+
+    .hud-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
     }
 
     #crosshair {
       position: absolute;
       top: 50%;
       left: 50%;
-      width: 20px;
-      height: 20px;
+      width: 24px;
+      height: 24px;
       transform: translate(-50%, -50%);
       pointer-events: none;
       z-index: 10;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .game-active #crosshair {
+      opacity: 1;
     }
 
     #crosshair::before,
@@ -146,8 +251,9 @@
       position: absolute;
       top: 10px;
       right: 10px;
-      display: flex;
+      display: none;
       gap: 2px;
+      z-index: 20;
     }
 
     .heart {
@@ -199,15 +305,39 @@
   </style>
 </head>
 <body>
-  <div id="instructions">
-    <h2>Welcome to 3D Minecraft</h2>
-    <p>WASD to move, Mouse to look around</p>
-    <p>Left click to break blocks, Right click to place</p>
-    <p>Scroll to change block type</p>
-      <p>Click anywhere on the game area to start looking around</p>
+  <canvas id="gameCanvas"></canvas>
+
+  <div id="startScreen">
+    <div class="start-panel">
+      <div class="start-title">Minecraft</div>
+      <div class="start-subtitle">Singleplayer</div>
+      <div class="start-form">
+        <label class="field-label" for="worldName">World Name</label>
+        <input id="worldName" type="text" value="New World" />
+
+        <label class="field-label" for="worldSeed">Seed</label>
+        <input id="worldSeed" type="text" placeholder="Random seed" />
+
+        <label class="field-label" for="gameMode">Game Mode</label>
+        <select id="gameMode">
+          <option value="survival">Survival</option>
+          <option value="creative">Creative</option>
+        </select>
+
+        <button id="startButton">Create New World</button>
+      </div>
+      <div class="start-notes">
+        <p>WASD to move, mouse to look around.</p>
+        <p>Left click to mine, right click to place, E to open inventory.</p>
+      </div>
+    </div>
+  </div>
+
   <div id="ui">
-    <div>Position: <span id="position">0, 0, 0</span></div>
-    <div>Block: <span id="selectedBlock">Grass</span></div>
+    <div class="hud-row">
+      <div>Coordinates: <span id="position">0, 0, 0</span></div>
+      <div>Selected: <span id="selectedBlock">None</span></div>
+    </div>
   </div>
 
   <div id="crosshair"></div>
@@ -235,13 +365,16 @@
     const ui = document.getElementById('ui');
     const positionEl = document.getElementById('position');
     const selectedBlockEl = document.getElementById('selectedBlock');
-    const instructions = document.getElementById('instructions');
+    const startScreen = document.getElementById('startScreen');
     const startButton = document.getElementById('startButton');
     const fullInventory = document.getElementById('fullInventory');
     const inventoryGrid = document.getElementById('inventoryGrid');
     const craftingGrid = document.getElementById('craftingGrid');
     const craftingResult = document.getElementById('craftingResult');
     const healthBar = document.getElementById('healthBar');
+    const worldNameInput = document.getElementById('worldName');
+    const worldSeedInput = document.getElementById('worldSeed');
+    const gameModeSelect = document.getElementById('gameMode');
 
     let scene, camera, renderer, controls;
     let world = {};
@@ -251,8 +384,17 @@
     let velocity = new THREE.Vector3();
     let direction = new THREE.Vector3();
     let prevTime = performance.now();
+    let prevMouseX = window.innerWidth / 2;
+    let prevMouseY = window.innerHeight / 2;
     let mobs = [];
     let dayTime = 0;
+    let yaw = 0;
+    let pitch = 0;
+    let moveForward = false;
+    let moveBackward = false;
+    let moveLeft = false;
+    let moveRight = false;
+    let canJump = true;
     let health = 20;
     let hunger = 20;
 
@@ -618,11 +760,14 @@
     }
 
     function startGame() {
-      console.log('Start game clicked');
-      instructions.style.display = 'none';
+      const worldName = worldNameInput.value.trim() || 'New World';
+      const seed = worldSeedInput.value.trim();
+      console.log('Starting world:', worldName, 'seed:', seed);
+      startScreen.style.display = 'none';
       document.body.classList.add('game-active');
       isLocked = true;
       ui.style.display = 'block';
+      healthBar.style.display = 'flex';
       prevTime = performance.now();
 
       // Reset mouse position tracking
@@ -1036,25 +1181,6 @@
       }
       return 10;
     }
-
-    // Initialize variables
-    let scene, camera, renderer, controls;
-    let world = {};
-    let selectedSlot = 0;
-    let isLocked = false;
-    let inventoryOpen = false;
-    let velocity = new THREE.Vector3();
-    let direction = new THREE.Vector3();
-    let prevTime = performance.now();
-    let mobs = [];
-    let dayTime = 0;
-    let yaw = 0;
-    let pitch = 0;
-    let moveForward = false;
-    let moveBackward = false;
-    let moveLeft = false;
-    let moveRight = false;
-    let canJump = true;
 
     init();
   </script>
