@@ -3,6 +3,283 @@
 <head>
   <title>Minecraft</title>
   <style>
+    * { margin: 0; padding: 0; }
+    body { font-family: Arial; overflow: hidden; background: #000; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #hud { position: absolute; bottom: 20px; left: 20px; color: #fff; font-size: 12px; text-shadow: 1px 1px 3px #000; }
+    #info { position: absolute; top: 20px; left: 20px; color: #fff; font-size: 13px; text-shadow: 1px 1px 3px #000; }
+    #inv { position: absolute; bottom: 20px; right: 20px; }
+    .slot { display: inline-block; width: 32px; height: 32px; border: 2px solid #666; margin: 2px; line-height: 32px; text-align: center; color: #fff; font-size: 11px; font-weight: bold; }
+    .slot.sel { border-color: #fff; background: rgba(100,100,100,0.8); }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="info">
+    <b>Minecraft Clone</b><br>
+    WASD Move | Space Jump<br>
+    LClick Mine | RClick Build<br>
+    1-8 Slot | Mouse Look
+  </div>
+  <div id="hud">
+    FPS: <b id="fps">0</b> | Pos: <b id="pos">0,0,0</b>
+  </div>
+  <div id="inv"></div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    // Constants
+    const STONE = 1, DIRT = 2, GRASS = 3, WOOD = 4, IRON = 5, GOLD = 6, DIAMOND = 7;
+    const COLORS = {
+      1: '#888888', 2: '#9f7f52', 3: '#6ba93c', 4: '#704020', 5: '#a4a4a4', 6: '#ffcc00', 7: '#00ffff'
+    };
+    const NAMES = { 1: 'Stone', 2: 'Dirt', 3: 'Grass', 4: 'Wood', 5: 'Iron', 6: 'Gold', 7: 'Diamond' };
+
+    // Player
+    let px = 128, py = 40, pz = 128;
+    let yaw = 0, pitch = 0;
+    let vy = 0;
+    let keys = {};
+    let chunks = {};
+
+    // Inventory
+    let inventory = [
+      { id: WOOD, count: 32 },
+      { id: DIRT, count: 16 },
+      null, null, null, null, null, null
+    ];
+    let selected = 0;
+
+    // FPS
+    let frame = 0, fpsTime = Date.now(), fps = 0;
+
+    // Terrain generation
+    function getChunk(cx, cz) {
+      const key = cx + ',' + cz;
+      if (chunks[key]) return chunks[key];
+      
+      const chunk = new Array(256 * 64);
+      for (let x = 0; x < 16; x++) {
+        for (let z = 0; z < 16; z++) {
+          const wx = cx * 16 + x, wz = cz * 16 + z;
+          const h = Math.floor(35 + Math.sin(wx * 0.1) * 4 + Math.cos(wz * 0.1) * 4);
+          
+          for (let y = 0; y < 64; y++) {
+            const idx = x + y * 16 + z * 256;
+            if (y < h - 4) chunk[idx] = STONE;
+            else if (y < h - 1) chunk[idx] = DIRT;
+            else if (y === h - 1) chunk[idx] = GRASS;
+          }
+
+          // Add ores
+          if (Math.random() > 0.97 && h > 20) {
+            const oy = Math.floor(h - 10);
+            const oidx = x + oy * 16 + z * 256;
+            if (oy > 0) chunk[oidx] = IRON;
+          }
+          if (Math.random() > 0.99 && h > 30) {
+            const oy = Math.floor(h - 20);
+            const oidx = x + oy * 16 + z * 256;
+            if (oy > 0) chunk[oidx] = DIAMOND;
+          }
+        }
+      }
+      chunks[key] = chunk;
+      return chunk;
+    }
+
+    function getBlock(x, y, z) {
+      if (y < 0 || y >= 64) return 0;
+      const cx = Math.floor(x / 16);
+      const cz = Math.floor(z / 16);
+      const lx = x - cx * 16;
+      const lz = z - cz * 16;
+      const chunk = getChunk(cx, cz);
+      return chunk[lx + y * 16 + lz * 256] || 0;
+    }
+
+    function setBlock(x, y, z, id) {
+      if (y < 0 || y >= 64) return;
+      const cx = Math.floor(x / 16);
+      const cz = Math.floor(z / 16);
+      const lx = x - cx * 16;
+      const lz = z - cz * 16;
+      const chunk = getChunk(cx, cz);
+      chunk[lx + y * 16 + lz * 256] = id;
+    }
+
+    function raycast(maxDist) {
+      const dirX = Math.cos(pitch) * Math.sin(yaw);
+      const dirY = Math.sin(pitch);
+      const dirZ = Math.cos(pitch) * Math.cos(yaw);
+
+      for (let d = 0.1; d < maxDist; d += 0.15) {
+        const bx = Math.floor(px + dirX * d);
+        const by = Math.floor(py + dirY * d);
+        const bz = Math.floor(pz + dirZ * d);
+
+        if (getBlock(bx, by, bz) !== 0) {
+          return { x: bx, y: by, z: bz, dx: dirX, dy: dirY, dz: dirZ };
+        }
+      }
+      return null;
+    }
+
+    function update() {
+      const spd = 0.12;
+      const fw = (keys['w'] ? 1 : 0) - (keys['s'] ? 1 : 0);
+      const rt = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
+
+      px += (Math.cos(yaw) * fw + Math.sin(yaw) * rt) * spd;
+      pz += (Math.sin(yaw) * fw - Math.cos(yaw) * rt) * spd;
+
+      // Gravity
+      let gy = 0;
+      for (let y = 63; y >= 0; y--) {
+        if (getBlock(Math.floor(px), y, Math.floor(pz)) !== 0) {
+          gy = y + 1;
+          break;
+        }
+      }
+
+      if (py > gy + 1.6) vy -= 0.008;
+      else vy = 0;
+
+      if (keys[' '] && py <= gy + 1.61) vy = 0.15;
+
+      py += vy;
+      if (py < gy + 1.6) py = gy + 1.6;
+    }
+
+    function render() {
+      ctx.fillStyle = '#87CEEB';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const fov = Math.PI / 4;
+      const perspective = canvas.width / (2 * Math.tan(fov / 2));
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+
+      // Render blocks
+      const blocks = [];
+      const chunkX = Math.floor(px / 16);
+      const chunkZ = Math.floor(pz / 16);
+
+      for (let ccx = chunkX - 1; ccx <= chunkX + 1; ccx++) {
+        for (let ccz = chunkZ - 1; ccz <= chunkZ + 1; ccz++) {
+          const chunk = getChunk(ccx, ccz);
+          for (let i = 0; i < chunk.length; i++) {
+            if (chunk[i] === 0) continue;
+
+            const lx = i % 16;
+            const y = Math.floor(i / 16) % 64;
+            const lz = Math.floor(i / 256);
+            
+            if (y < 20 || y > 50) continue;
+
+            const wx = ccx * 16 + lx;
+            const wz = ccz * 16 + lz;
+            const dist = Math.hypot(wx - px, y - py, wz - pz);
+
+            if (dist < 60) {
+              blocks.push({ x: wx, y, z: wz, type: chunk[i], dist });
+            }
+          }
+        }
+      }
+
+      blocks.sort((a, b) => b.dist - a.dist);
+
+      for (const b of blocks) {
+        const dx = b.x - px;
+        const dy = b.y - py;
+        const dz = b.z - pz;
+
+        const cosY = Math.cos(yaw);
+        const sinY = Math.sin(yaw);
+        const cosP = Math.cos(pitch);
+        const sinP = Math.sin(pitch);
+
+        let rx = dx * cosY - dz * sinY;
+        let rz = dx * sinY + dz * cosY;
+        let ry = dy;
+
+        const ty = ry * cosP - rz * sinP;
+        rz = ry * sinP + rz * cosP;
+
+        if (rz > 0.1) {
+          const sx = cx + (rx / rz) * perspective;
+          const sy = cy - (ty / rz) * perspective;
+          const size = Math.max(1, perspective / rz * 0.75);
+
+          ctx.fillStyle = COLORS[b.type] || '#666';
+          ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
+          ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(sx - size / 2, sy - size / 2, size, size);
+        }
+      }
+
+      // Update display
+      frame++;
+      const now = Date.now();
+      if (now - fpsTime > 250) {
+        fps = Math.round(frame / ((now - fpsTime) / 1000));
+        frame = 0;
+        fpsTime = now;
+      }
+
+      document.getElementById('fps').textContent = fps;
+      document.getElementById('pos').textContent = Math.floor(px) + ',' + Math.floor(py) + ',' + Math.floor(pz);
+
+      // Inventory display
+      const inv = document.getElementById('inv');
+      inv.innerHTML = '';
+      for (let i = 0; i < 8; i++) {
+        const slot = document.createElement('div');
+        slot.className = 'slot' + (i === selected ? ' sel' : '');
+        if (inventory[i]) {
+          slot.textContent = inventory[i].count;
+        }
+        inv.appendChild(slot);
+      }
+    }
+
+    function gameLoop() {
+      update();
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Input
+    window.addEventListener('keydown', e => {
+      keys[e.key.toLowerCase()] = true;
+      if (e.key >= '1' && e.key <= '8') selected = parseInt(e.key) - 1;
+    });
+    window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+    window.addEventListener('mousemove', e => {
+      yaw -= e.movementX * 0.004;
+      pitch -= e.movementY * 0.004;
+      pitch = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, pitch));
+    });
+    document.addEventListener('mousedown', e => canvas.requestPointerLock?.());
+    window.addEventListener('resize', () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    });
+
+    gameLoop();
+  </script>
+</body>
+</html><!DOCTYPE html>
+<html>
+<head>
+  <title>Minecraft</title>
+  <style>
     body { margin: 0; padding: 0; overflow: hidden; background: black; }
     canvas { display: block; width: 100vw; height: 100vh; }
     #ui { position: absolute; top: 20px; left: 20px; color: white; font-family: Arial; font-size: 14px; }
