@@ -6,14 +6,53 @@
   <title>Flat Block World</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { overflow: hidden; background: #111; font-family: Arial, sans-serif; color: #fff; }
+    body { overflow: hidden; background: #111; color: #fff; font-family: Arial, sans-serif; }
     canvas { display: block; width: 100vw; height: 100vh; }
-    #overlay { position: absolute; top: 18px; left: 18px; z-index: 10; font-size: 13px; line-height: 1.6; text-shadow: 0 0 8px rgba(0,0,0,0.8); }
-    #hotbar { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; z-index: 10; }
-    .slot { width: 34px; height: 34px; border: 2px solid rgba(255,255,255,0.45); background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; }
+    #overlay {
+      position: absolute;
+      top: 18px;
+      left: 18px;
+      z-index: 10;
+      font-size: 13px;
+      line-height: 1.6;
+      text-shadow: 0 0 8px rgba(0,0,0,0.8);
+    }
+    #hotbar {
+      position: absolute;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 6px;
+      z-index: 10;
+    }
+    .slot {
+      width: 36px;
+      height: 36px;
+      border: 2px solid rgba(255,255,255,0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      color: #fff;
+      background: rgba(0,0,0,0.5);
+    }
     .slot.active { border-color: #fff; }
-    .crosshair { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; transform: translate(-50%, -50%); pointer-events: none; }
-    .crosshair::before, .crosshair::after { content: ''; position: absolute; background: #fff; }
+    .crosshair {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 16px;
+      height: 16px;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 10;
+    }
+    .crosshair::before, .crosshair::after {
+      content: '';
+      position: absolute;
+      background: #fff;
+    }
     .crosshair::before { left: 2px; top: 7px; width: 12px; height: 1px; }
     .crosshair::after { left: 7px; top: 2px; width: 1px; height: 12px; }
   </style>
@@ -21,12 +60,14 @@
 <body>
   <canvas id="canvas"></canvas>
   <div id="overlay">
+    Click the canvas to enable look<br>
     WASD Move | Space Jump | C Crouch<br>
-    Left click Remove | Right click Place<br>
-    1-4 Select Block Slot
+    Left click remove | Right click place<br>
+    1-4 select block slot
   </div>
   <div id="hotbar"></div>
   <div class="crosshair"></div>
+
   <script>
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
@@ -52,23 +93,22 @@
       { block: BLOCKS[2], count: 12 },
       { block: BLOCKS[3], count: 16 }
     ];
-
     let selectedSlot = 0;
     const world = new Map();
-    const SIZE = 10;
+    const GRID = 10;
 
-    for (let x = -SIZE; x <= SIZE; x++) {
-      for (let z = -SIZE; z <= SIZE; z++) {
+    for (let x = -GRID; x <= GRID; x++) {
+      for (let z = -GRID; z <= GRID; z++) {
         world.set(`${x},0,${z}`, BLOCKS[0]);
       }
     }
 
     const camera = {
       x: 0,
-      y: 9,
+      y: 7,
       z: -12,
       yaw: 0,
-      pitch: -0.35,
+      pitch: -0.25,
       speed: 0.18,
       vy: 0,
       crouch: false
@@ -90,7 +130,7 @@
       const ty = ry * cosP - rz * sinP;
       const tz = ry * sinP + rz * cosP;
       if (tz <= 0.2) return null;
-      const scale = 550 / tz;
+      const scale = 600 / tz;
       return {
         x: canvas.width / 2 + rx * scale,
         y: canvas.height / 2 - ty * scale,
@@ -98,7 +138,7 @@
       };
     }
 
-    function corners(x, y, z) {
+    function blockCorners(x, y, z) {
       return [
         { x, y, z },
         { x + 1, y, z },
@@ -120,17 +160,25 @@
       [1,2,6,5]
     ];
 
+    function shadeColor(hex, factor) {
+      const value = parseInt(hex.slice(1), 16);
+      const r = Math.round(((value >> 16) & 255) * factor);
+      const g = Math.round(((value >> 8) & 255) * factor);
+      const b = Math.round((value & 255) * factor);
+      return `rgb(${r},${g},${b})`;
+    }
+
     function drawBlock(x, y, z, block) {
-      const pts = corners(x, y, z).map(project);
-      if (pts.some(p => p === null)) return;
-      const order = [1,0,2,3,4,5];
-      order.forEach((fi) => {
-        const face = faces[fi].map(i => pts[i]);
+      const pts = blockCorners(x, y, z).map(project);
+      if (pts.some((p) => p === null)) return;
+      const order = [1, 0, 2, 3, 4, 5];
+      order.forEach((faceIndex) => {
+        const face = faces[faceIndex].map((i) => pts[i]);
         ctx.beginPath();
         ctx.moveTo(face[0].x, face[0].y);
-        face.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+        face.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
         ctx.closePath();
-        const shade = fi === 1 ? 0.82 : (fi === 2 || fi === 3 ? 0.92 : 1);
+        const shade = faceIndex === 1 ? 0.82 : (faceIndex === 2 || faceIndex === 3 ? 0.9 : 1);
         ctx.fillStyle = shadeColor(block.color, shade);
         ctx.fill();
         ctx.strokeStyle = '#000';
@@ -139,30 +187,22 @@
       });
     }
 
-    function shadeColor(hex, factor) {
-      const num = parseInt(hex.slice(1), 16);
-      const r = Math.round(((num >> 16) & 255) * factor);
-      const g = Math.round(((num >> 8) & 255) * factor);
-      const b = Math.round((num & 255) * factor);
-      return `rgb(${r},${g},${b})`;
-    }
-
     function drawWorld() {
       ctx.fillStyle = '#87CEEB';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      const drawn = [];
+      const blocks = [];
       world.forEach((block, key) => {
-        const [x,y,z] = key.split(',').map(Number);
+        const [x, y, z] = key.split(',').map(Number);
         const center = project({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
         if (!center) return;
-        drawn.push({ x, y, z, block, depth: center.y });
+        blocks.push({ x, y, z, block, depth: center.y });
       });
-      drawn.sort((a,b) => b.depth - a.depth);
-      drawn.forEach(entry => drawBlock(entry.x, entry.y, entry.z, entry.block));
+      blocks.sort((a, b) => b.depth - a.depth);
+      blocks.forEach((entry) => drawBlock(entry.x, entry.y, entry.z, entry.block));
     }
 
     function groundHeight(x, z) {
-      for (let y = 3; y >= 0; y--) {
+      for (let y = 2; y >= 0; y--) {
         if (world.has(`${x},${y},${z}`)) return y;
       }
       return -1;
@@ -176,28 +216,28 @@
       camera.x += dx * camera.speed;
       camera.z += dz * camera.speed;
       const ground = groundHeight(Math.floor(camera.x), Math.floor(camera.z));
-      if (!camera.crouch) camera.vy -= 0.012;
-      if (keys[' '] && Math.abs(camera.y - (ground + 2.3)) < 0.18) camera.vy = 0.22;
+      if (!camera.crouch) camera.vy -= 0.01;
+      if (keys[' '] && Math.abs(camera.y - (ground + 2.2)) < 0.2) camera.vy = 0.22;
       camera.y += camera.vy;
-      if (camera.y < ground + 2.3) {
-        camera.y = ground + 2.3;
+      if (camera.y < ground + 2.2) {
+        camera.y = ground + 2.2;
         camera.vy = 0;
       }
       if (camera.crouch) camera.y = ground + 1.7;
     }
 
-    function castRay(maxDistance) {
+    function castRay(maxDist) {
       const dir = {
         x: Math.sin(camera.yaw) * Math.cos(camera.pitch),
         y: Math.sin(camera.pitch),
         z: Math.cos(camera.yaw) * Math.cos(camera.pitch)
       };
-      for (let d = 0.6; d < maxDistance; d += 0.2) {
+      for (let d = 0.5; d < maxDist; d += 0.2) {
         const x = Math.floor(camera.x + dir.x * d);
         const y = Math.floor(camera.y + dir.y * d);
         const z = Math.floor(camera.z + dir.z * d);
         if (world.has(`${x},${y},${z}`)) {
-          return { x, y, z, face: { x: Math.sign(dir.x), y: Math.sign(dir.y), z: Math.sign(dir.z) } };
+          return { x, y, z, nx: Math.sign(dir.x), ny: Math.sign(dir.y), nz: Math.sign(dir.z) };
         }
       }
       return null;
@@ -206,10 +246,10 @@
     function placeBlock() {
       const hit = castRay(6);
       if (!hit) return;
-      const nx = hit.x + (Math.abs(hit.face.x) > 0 ? hit.face.x : 0);
-      const ny = hit.y + (Math.abs(hit.face.y) > 0 ? hit.face.y : 1);
-      const nz = hit.z + (Math.abs(hit.face.z) > 0 ? hit.face.z : 0);
-      const key = `${nx},${ny},${nz}`;
+      const tx = hit.x + (hit.nx !== 0 ? hit.nx : 0);
+      const ty = hit.y + (hit.ny !== 0 ? hit.ny : 1);
+      const tz = hit.z + (hit.nz !== 0 ? hit.nz : 0);
+      const key = `${tx},${ty},${tz}`;
       if (!world.has(key)) {
         world.set(key, inventory[selectedSlot].block);
       }
@@ -224,10 +264,10 @@
     function renderHotbar() {
       hotbar.innerHTML = '';
       inventory.forEach((slot, idx) => {
-        const el = document.createElement('div');
-        el.className = 'slot' + (idx === selectedSlot ? ' active' : '');
-        el.textContent = slot.block.name[0] + (slot.count > 1 ? slot.count : '');
-        hotbar.appendChild(el);
+        const item = document.createElement('div');
+        item.className = 'slot' + (idx === selectedSlot ? ' active' : '');
+        item.textContent = slot.block.name[0] + (slot.count > 1 ? slot.count : '');
+        hotbar.appendChild(item);
       });
     }
 
@@ -253,10 +293,10 @@
     });
     canvas.addEventListener('click', () => canvas.requestPointerLock());
     canvas.addEventListener('mousedown', (e) => {
-      if (e.button === 2) placeBlock();
       if (e.button === 0) removeBlock();
+      if (e.button === 2) placeBlock();
     });
-    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     renderHotbar();
     loop();
   </script>
@@ -273,8 +313,8 @@
     canvas { display: block; width: 100vw; height: 100vh; }
     #overlay {
       position: absolute;
-      left: 20px;
-      top: 20px;
+      left: 18px;
+      top: 18px;
       z-index: 10;
       font-size: 13px;
       line-height: 1.6;
@@ -282,7 +322,7 @@
     }
     #hotbar {
       position: absolute;
-      bottom: 20px;
+      bottom: 18px;
       left: 50%;
       transform: translateX(-50%);
       display: flex;
@@ -290,15 +330,15 @@
       z-index: 10;
     }
     .slot {
-      width: 32px;
-      height: 32px;
-      border: 2px solid rgba(255,255,255,0.4);
-      background: rgba(0,0,0,0.5);
+      width: 36px;
+      height: 36px;
+      border: 2px solid rgba(255,255,255,0.45);
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 12px;
       color: #fff;
+      background: rgba(0,0,0,0.5);
     }
     .slot.active { border-color: #fff; }
     .crosshair {
@@ -309,6 +349,7 @@
       height: 16px;
       transform: translate(-50%, -50%);
       pointer-events: none;
+      z-index: 10;
     }
     .crosshair::before, .crosshair::after {
       content: '';
@@ -322,10 +363,10 @@
 <body>
   <canvas id="canvas"></canvas>
   <div id="overlay">
-    <div>WASD Move | Space Jump | C Crouch</div>
-    <div>Left click: remove | Right click: place</div>
-    <div>1-4: select block</div>
-    <div>Blocks have thin black lines between them</div>
+    Click canvas to enable look
+    <br>WASD Move | Space Jump | C Crouch
+    <br>Left click remove | Right click place
+    <br>1-4 select block slot
   </div>
   <div id="hotbar"></div>
   <div class="crosshair"></div>
@@ -349,34 +390,31 @@
 
     const inventory = [
       { block: BLOCKS[0], count: 32 },
-      { block: BLOCKS[1], count: 16 },
-      { block: BLOCKS[2], count: 8 },
+      { block: BLOCKS[1], count: 20 },
+      { block: BLOCKS[2], count: 12 },
       { block: BLOCKS[3], count: 16 }
     ];
-    let selectedIndex = 0;
+    let selectedSlot = 0;
     const world = new Map();
-    const WORLD_SIZE = 16;
+    const GRID = 10;
 
-    for (let x = -WORLD_SIZE; x <= WORLD_SIZE; x++) {
-      for (let z = -WORLD_SIZE; z <= WORLD_SIZE; z++) {
+    for (let x = -GRID; x <= GRID; x++) {
+      for (let z = -GRID; z <= GRID; z++) {
         world.set(`${x},0,${z}`, BLOCKS[0]);
       }
     }
 
     const camera = {
       x: 0,
-      y: 8,
-      z: 0,
-      pitch: -0.35,
+      y: 7,
+      z: -12,
       yaw: 0,
+      pitch: -0.25,
       speed: 0.18,
       vy: 0,
       crouch: false
     };
-
     const keys = {};
-    let mouseDown = false;
-    let mouseButton = 0;
 
     function project(point) {
       const dx = point.x - camera.x;
@@ -391,25 +429,25 @@
       const ry = dy;
       const ty = ry * cosP - rz * sinP;
       const tz = ry * sinP + rz * cosP;
-      if (tz <= 0.1) return null;
-      const f = 600 / tz;
+      if (tz <= 0.2) return null;
+      const scale = 600 / tz;
       return {
-        x: canvas.width / 2 + rx * f,
-        y: canvas.height / 2 - ty * f,
-        scale: f
+        x: canvas.width / 2 + rx * scale,
+        y: canvas.height / 2 - ty * scale,
+        s: scale
       };
     }
 
     function blockCorners(x, y, z) {
       return [
-        { x: x, y: y, z: z },
-        { x: x + 1, y: y, z: z },
-        { x: x + 1, y: y + 1, z: z },
-        { x: x, y: y + 1, z: z },
-        { x: x, y: y, z: z + 1 },
-        { x: x + 1, y: y, z: z + 1 },
-        { x: x + 1, y: y + 1, z: z + 1 },
-        { x: x, y: y + 1, z: z + 1 }
+        { x, y, z },
+        { x + 1, y, z },
+        { x + 1, y + 1, z },
+        { x, y + 1, z },
+        { x, y, z + 1 },
+        { x + 1, y, z + 1 },
+        { x + 1, y + 1, z + 1 },
+        { x, y + 1, z + 1 }
       ];
     }
 
@@ -422,20 +460,25 @@
       [1,2,6,5]
     ];
 
+    function shadeColor(hex, factor) {
+      const value = parseInt(hex.slice(1), 16);
+      const r = Math.round(((value >> 16) & 255) * factor);
+      const g = Math.round(((value >> 8) & 255) * factor);
+      const b = Math.round((value & 255) * factor);
+      return `rgb(${r},${g},${b})`;
+    }
+
     function drawBlock(x, y, z, block) {
-      const corners = blockCorners(x, y, z).map(project);
-      if (corners.some(c => c === null)) return;
-      const faceOrder = [1, 0, 2, 3, 4, 5];
-      faceOrder.forEach(fi => {
-        const face = faces[fi].map(i => corners[i]);
-        const avgZ = face.reduce((sum, p) => sum + p.y, 0);
-        const visible = face.every(p => p.x !== null);
-        if (!visible) return;
+      const pts = blockCorners(x, y, z).map(project);
+      if (pts.some((p) => p === null)) return;
+      const drawOrder = [1, 0, 2, 3, 4, 5];
+      drawOrder.forEach((faceIndex) => {
+        const face = faces[faceIndex].map((i) => pts[i]);
         ctx.beginPath();
         ctx.moveTo(face[0].x, face[0].y);
-        face.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+        face.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
         ctx.closePath();
-        const shade = fi === 1 ? 0.85 : (fi === 2 || fi === 3 ? 0.9 : 1);
+        const shade = faceIndex === 1 ? 0.82 : (faceIndex === 2 || faceIndex === 3 ? 0.9 : 1);
         ctx.fillStyle = shadeColor(block.color, shade);
         ctx.fill();
         ctx.strokeStyle = '#000';
@@ -444,30 +487,22 @@
       });
     }
 
-    function shadeColor(color, factor) {
-      const value = parseInt(color.slice(1), 16);
-      const r = Math.round(((value >> 16) & 255) * factor);
-      const g = Math.round(((value >> 8) & 255) * factor);
-      const b = Math.round((value & 255) * factor);
-      return `rgb(${r},${g},${b})`;
-    }
-
     function drawWorld() {
       ctx.fillStyle = '#87CEEB';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       const blocks = [];
       world.forEach((block, key) => {
-        const [x,y,z] = key.split(',').map(Number);
+        const [x, y, z] = key.split(',').map(Number);
         const center = project({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
         if (!center) return;
         blocks.push({ x, y, z, block, depth: center.y });
       });
-      blocks.sort((a,b) => b.depth - a.depth);
-      blocks.forEach(b => drawBlock(b.x, b.y, b.z, b.block));
+      blocks.sort((a, b) => b.depth - a.depth);
+      blocks.forEach((block) => drawBlock(block.x, block.y, block.z, block.block));
     }
 
-    function getGroundHeight(x,z) {
-      for (let y = 10; y >= 0; y--) {
+    function groundHeight(x, z) {
+      for (let y = 2; y >= 0; y--) {
         if (world.has(`${x},${y},${z}`)) return y;
       }
       return -1;
@@ -480,14 +515,15 @@
       const dz = Math.cos(camera.yaw) * forward - Math.sin(camera.yaw) * right;
       camera.x += dx * camera.speed;
       camera.z += dz * camera.speed;
-      const ground = getGroundHeight(Math.floor(camera.x), Math.floor(camera.z));
+      const ground = groundHeight(Math.floor(camera.x), Math.floor(camera.z));
       if (!camera.crouch) camera.vy -= 0.01;
-      if (keys[' '] && Math.abs(camera.y - (ground + 2.2)) < 0.15) camera.vy = 0.22;
+      if (keys[' '] && Math.abs(camera.y - (ground + 2.2)) < 0.2) camera.vy = 0.22;
       camera.y += camera.vy;
       if (camera.y < ground + 2.2) {
         camera.y = ground + 2.2;
         camera.vy = 0;
       }
+      if (camera.crouch) camera.y = ground + 1.7;
     }
 
     function castRay(maxDist) {
@@ -501,7 +537,7 @@
         const y = Math.floor(camera.y + dir.y * d);
         const z = Math.floor(camera.z + dir.z * d);
         if (world.has(`${x},${y},${z}`)) {
-          return { x, y, z, nx: Math.sign(dir.x) || 0, ny: Math.sign(dir.y) || 0, nz: Math.sign(dir.z) || 0 };
+          return { x, y, z, nx: Math.sign(dir.x), ny: Math.sign(dir.y), nz: Math.sign(dir.z) };
         }
       }
       return null;
@@ -510,12 +546,12 @@
     function placeBlock() {
       const hit = castRay(6);
       if (!hit) return;
-      const pxp = hit.x + (Math.abs(hit.nx) > 0 ? hit.nx : 0);
-      const pyp = hit.y + (Math.abs(hit.ny) > 0 ? hit.ny : 1);
-      const pzp = hit.z + (Math.abs(hit.nz) > 0 ? hit.nz : 0);
-      const key = `${pxp},${pyp},${pzp}`;
+      const tx = hit.x + (hit.nx !== 0 ? hit.nx : 0);
+      const ty = hit.y + (hit.ny !== 0 ? hit.ny : 1);
+      const tz = hit.z + (hit.nz !== 0 ? hit.nz : 0);
+      const key = `${tx},${ty},${tz}`;
       if (!world.has(key)) {
-        world.set(key, inventory[selectedIndex].block);
+        world.set(key, inventory[selectedSlot].block);
       }
     }
 
@@ -528,10 +564,10 @@
     function renderHotbar() {
       hotbar.innerHTML = '';
       inventory.forEach((slot, idx) => {
-        const el = document.createElement('div');
-        el.className = 'slot' + (idx === selectedIndex ? ' active' : '');
-        el.textContent = slot.block.name[0] + (slot.count > 1 ? slot.count : '');
-        hotbar.appendChild(el);
+        const item = document.createElement('div');
+        item.className = 'slot' + (idx === selectedSlot ? ' active' : '');
+        item.textContent = slot.block.name[0] + (slot.count > 1 ? slot.count : '');
+        hotbar.appendChild(item);
       });
     }
 
@@ -542,27 +578,25 @@
       requestAnimationFrame(loop);
     }
 
-    window.addEventListener('keydown', e => {
+    window.addEventListener('keydown', (e) => {
       keys[e.key.toLowerCase()] = true;
       if (e.key === 'c') camera.crouch = !camera.crouch;
-      if (e.key >= '1' && e.key <= '4') selectedIndex = Number(e.key) - 1;
+      if (e.key >= '1' && e.key <= '4') selectedSlot = Number(e.key) - 1;
     });
-    window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
-    window.addEventListener('mousemove', e => {
+    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+    window.addEventListener('mousemove', (e) => {
       if (document.pointerLockElement === canvas) {
         camera.yaw -= e.movementX * 0.002;
         camera.pitch -= e.movementY * 0.002;
-        camera.pitch = Math.max(-1.4, Math.min(1.4, camera.pitch));
+        camera.pitch = Math.max(-1.3, Math.min(1.3, camera.pitch));
       }
     });
     canvas.addEventListener('click', () => canvas.requestPointerLock());
-    canvas.addEventListener('mousedown', e => {
-      mouseDown = true;
-      mouseButton = e.button;
-      if (e.button === 2) placeBlock();
+    canvas.addEventListener('mousedown', (e) => {
       if (e.button === 0) removeBlock();
+      if (e.button === 2) placeBlock();
     });
-    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     renderHotbar();
     loop();
   </script>
