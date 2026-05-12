@@ -1,3556 +1,570 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Minecraft</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flat Block World</title>
   <style>
-    * { margin: 0; padding: 0; }
-    body { font-family: Arial; overflow: hidden; background: #000; }
-    canvas { display: block; width: 100%; height: 100%; }
-    #hud { position: absolute; bottom: 20px; left: 20px; color: #fff; font-size: 12px; text-shadow: 1px 1px 3px #000; }
-    #info { position: absolute; top: 20px; left: 20px; color: #fff; font-size: 13px; text-shadow: 1px 1px 3px #000; }
-    #inv { position: absolute; bottom: 20px; right: 20px; }
-    .slot { display: inline-block; width: 32px; height: 32px; border: 2px solid #666; margin: 2px; line-height: 32px; text-align: center; color: #fff; font-size: 11px; font-weight: bold; }
-    .slot.sel { border-color: #fff; background: rgba(100,100,100,0.8); }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #111; font-family: Arial, sans-serif; color: #fff; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #overlay { position: absolute; top: 18px; left: 18px; z-index: 10; font-size: 13px; line-height: 1.6; text-shadow: 0 0 8px rgba(0,0,0,0.8); }
+    #hotbar { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; z-index: 10; }
+    .slot { width: 34px; height: 34px; border: 2px solid rgba(255,255,255,0.45); background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; }
+    .slot.active { border-color: #fff; }
+    .crosshair { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; transform: translate(-50%, -50%); pointer-events: none; }
+    .crosshair::before, .crosshair::after { content: ''; position: absolute; background: #fff; }
+    .crosshair::before { left: 2px; top: 7px; width: 12px; height: 1px; }
+    .crosshair::after { left: 7px; top: 2px; width: 1px; height: 12px; }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
-  <div id="info">
-    <b>Minecraft Clone</b><br>
-    WASD Move | Space Jump<br>
-    LClick Mine | RClick Build<br>
-    1-8 Slot | Mouse Look
+  <div id="overlay">
+    WASD Move | Space Jump | C Crouch<br>
+    Left click Remove | Right click Place<br>
+    1-4 Select Block Slot
   </div>
-  <div id="hud">
-    FPS: <b id="fps">0</b> | Pos: <b id="pos">0,0,0</b>
-  </div>
-  <div id="inv"></div>
-
+  <div id="hotbar"></div>
+  <div class="crosshair"></div>
   <script>
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    const hotbar = document.getElementById('hotbar');
 
-    // Constants
-    const STONE = 1, DIRT = 2, GRASS = 3, WOOD = 4, IRON = 5, GOLD = 6, DIAMOND = 7;
-    const COLORS = {
-      1: '#888888', 2: '#9f7f52', 3: '#6ba93c', 4: '#704020', 5: '#a4a4a4', 6: '#ffcc00', 7: '#00ffff'
-    };
-    const NAMES = { 1: 'Stone', 2: 'Dirt', 3: 'Grass', 4: 'Wood', 5: 'Iron', 6: 'Gold', 7: 'Diamond' };
-
-    // Player
-    let px = 128, py = 40, pz = 128;
-    let yaw = 0, pitch = 0;
-    let vy = 0;
-    let keys = {};
-    let chunks = {};
-
-    // Inventory
-    let inventory = [
-      { id: WOOD, count: 32 },
-      { id: DIRT, count: 16 },
-      null, null, null, null, null, null
-    ];
-    let selected = 0;
-
-    // FPS
-    let frame = 0, fpsTime = Date.now(), fps = 0;
-
-    // Terrain generation
-    function getChunk(cx, cz) {
-      const key = cx + ',' + cz;
-      if (chunks[key]) return chunks[key];
-      
-      const chunk = new Array(256 * 64);
-      for (let x = 0; x < 16; x++) {
-        for (let z = 0; z < 16; z++) {
-          const wx = cx * 16 + x, wz = cz * 16 + z;
-          const h = Math.floor(35 + Math.sin(wx * 0.1) * 4 + Math.cos(wz * 0.1) * 4);
-          
-          for (let y = 0; y < 64; y++) {
-            const idx = x + y * 16 + z * 256;
-            if (y < h - 4) chunk[idx] = STONE;
-            else if (y < h - 1) chunk[idx] = DIRT;
-            else if (y === h - 1) chunk[idx] = GRASS;
-          }
-
-          // Add ores
-          if (Math.random() > 0.97 && h > 20) {
-            const oy = Math.floor(h - 10);
-            const oidx = x + oy * 16 + z * 256;
-            if (oy > 0) chunk[oidx] = IRON;
-          }
-          if (Math.random() > 0.99 && h > 30) {
-            const oy = Math.floor(h - 20);
-            const oidx = x + oy * 16 + z * 256;
-            if (oy > 0) chunk[oidx] = DIAMOND;
-          }
-        }
-      }
-      chunks[key] = chunk;
-      return chunk;
-    }
-
-    function getBlock(x, y, z) {
-      if (y < 0 || y >= 64) return 0;
-      const cx = Math.floor(x / 16);
-      const cz = Math.floor(z / 16);
-      const lx = x - cx * 16;
-      const lz = z - cz * 16;
-      const chunk = getChunk(cx, cz);
-      return chunk[lx + y * 16 + lz * 256] || 0;
-    }
-
-    function setBlock(x, y, z, id) {
-      if (y < 0 || y >= 64) return;
-      const cx = Math.floor(x / 16);
-      const cz = Math.floor(z / 16);
-      const lx = x - cx * 16;
-      const lz = z - cz * 16;
-      const chunk = getChunk(cx, cz);
-      chunk[lx + y * 16 + lz * 256] = id;
-    }
-
-    function raycast(maxDist) {
-      const dirX = Math.cos(pitch) * Math.sin(yaw);
-      const dirY = Math.sin(pitch);
-      const dirZ = Math.cos(pitch) * Math.cos(yaw);
-
-      for (let d = 0.1; d < maxDist; d += 0.15) {
-        const bx = Math.floor(px + dirX * d);
-        const by = Math.floor(py + dirY * d);
-        const bz = Math.floor(pz + dirZ * d);
-
-        if (getBlock(bx, by, bz) !== 0) {
-          return { x: bx, y: by, z: bz, dx: dirX, dy: dirY, dz: dirZ };
-        }
-      }
-      return null;
-    }
-
-    function update() {
-      const spd = 0.12;
-      const fw = (keys['w'] ? 1 : 0) - (keys['s'] ? 1 : 0);
-      const rt = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
-
-      px += (Math.cos(yaw) * fw + Math.sin(yaw) * rt) * spd;
-      pz += (Math.sin(yaw) * fw - Math.cos(yaw) * rt) * spd;
-
-      // Gravity
-      let gy = 0;
-      for (let y = 63; y >= 0; y--) {
-        if (getBlock(Math.floor(px), y, Math.floor(pz)) !== 0) {
-          gy = y + 1;
-          break;
-        }
-      }
-
-      if (py > gy + 1.6) vy -= 0.008;
-      else vy = 0;
-
-      if (keys[' '] && py <= gy + 1.61) vy = 0.15;
-
-      py += vy;
-      if (py < gy + 1.6) py = gy + 1.6;
-    }
-
-    function render() {
-      ctx.fillStyle = '#87CEEB';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      const fov = Math.PI / 4;
-      const perspective = canvas.width / (2 * Math.tan(fov / 2));
-      const cx = canvas.width / 2;
-      const cy = canvas.height / 2;
-
-      // Render blocks
-      const blocks = [];
-      const chunkX = Math.floor(px / 16);
-      const chunkZ = Math.floor(pz / 16);
-
-      for (let ccx = chunkX - 1; ccx <= chunkX + 1; ccx++) {
-        for (let ccz = chunkZ - 1; ccz <= chunkZ + 1; ccz++) {
-          const chunk = getChunk(ccx, ccz);
-          for (let i = 0; i < chunk.length; i++) {
-            if (chunk[i] === 0) continue;
-
-            const lx = i % 16;
-            const y = Math.floor(i / 16) % 64;
-            const lz = Math.floor(i / 256);
-            
-            if (y < 20 || y > 50) continue;
-
-            const wx = ccx * 16 + lx;
-            const wz = ccz * 16 + lz;
-            const dist = Math.hypot(wx - px, y - py, wz - pz);
-
-            if (dist < 60) {
-              blocks.push({ x: wx, y, z: wz, type: chunk[i], dist });
-            }
-          }
-        }
-      }
-
-      blocks.sort((a, b) => b.dist - a.dist);
-
-      for (const b of blocks) {
-        const dx = b.x - px;
-        const dy = b.y - py;
-        const dz = b.z - pz;
-
-        const cosY = Math.cos(yaw);
-        const sinY = Math.sin(yaw);
-        const cosP = Math.cos(pitch);
-        const sinP = Math.sin(pitch);
-
-        let rx = dx * cosY - dz * sinY;
-        let rz = dx * sinY + dz * cosY;
-        let ry = dy;
-
-        const ty = ry * cosP - rz * sinP;
-        rz = ry * sinP + rz * cosP;
-
-        if (rz > 0.1) {
-          const sx = cx + (rx / rz) * perspective;
-          const sy = cy - (ty / rz) * perspective;
-          const size = Math.max(1, perspective / rz * 0.75);
-
-          ctx.fillStyle = COLORS[b.type] || '#666';
-          ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
-          ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-          ctx.lineWidth = 0.5;
-          ctx.strokeRect(sx - size / 2, sy - size / 2, size, size);
-        }
-      }
-
-      // Update display
-      frame++;
-      const now = Date.now();
-      if (now - fpsTime > 250) {
-        fps = Math.round(frame / ((now - fpsTime) / 1000));
-        frame = 0;
-        fpsTime = now;
-      }
-
-      document.getElementById('fps').textContent = fps;
-      document.getElementById('pos').textContent = Math.floor(px) + ',' + Math.floor(py) + ',' + Math.floor(pz);
-
-      // Inventory display
-      const inv = document.getElementById('inv');
-      inv.innerHTML = '';
-      for (let i = 0; i < 8; i++) {
-        const slot = document.createElement('div');
-        slot.className = 'slot' + (i === selected ? ' sel' : '');
-        if (inventory[i]) {
-          slot.textContent = inventory[i].count;
-        }
-        inv.appendChild(slot);
-      }
-    }
-
-    function gameLoop() {
-      update();
-      render();
-      requestAnimationFrame(gameLoop);
-    }
-
-    // Input
-    window.addEventListener('keydown', e => {
-      keys[e.key.toLowerCase()] = true;
-      if (e.key >= '1' && e.key <= '8') selected = parseInt(e.key) - 1;
-    });
-    window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
-    window.addEventListener('mousemove', e => {
-      yaw -= e.movementX * 0.004;
-      pitch -= e.movementY * 0.004;
-      pitch = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, pitch));
-    });
-    document.addEventListener('mousedown', e => canvas.requestPointerLock?.());
-    window.addEventListener('resize', () => {
+    function resize() {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
-    });
+    }
+    resize();
+    window.addEventListener('resize', resize);
 
-    gameLoop();
-  </script>
-</body>
-</html><!DOCTYPE html>
-<html>
-<head>
-  <title>Minecraft</title>
-  <style>
-    body { margin: 0; padding: 0; overflow: hidden; background: black; }
-    canvas { display: block; width: 100vw; height: 100vh; }
-    #ui { position: absolute; top: 20px; left: 20px; color: white; font-family: Arial; font-size: 14px; }
-    #pos { position: absolute; top: 20px; right: 20px; color: white; font-family: Arial; font-size: 12px; text-align: right; }
-  </style>
-</head>
-<body>
-  <canvas id="game"></canvas>
-  <div id="ui">FPS: <span id="fps">0</span><br>Pos: <span id="xyz">0,0,0</span></div>
-  <div id="pos">WASD Move | Space Jump<br>LMB Mine | RMB Build | 1-8 Select</div>
+    const BLOCKS = [
+      { id: 1, name: 'Grass', color: '#5BA93C' },
+      { id: 2, name: 'Dirt', color: '#8B6F47' },
+      { id: 3, name: 'Stone', color: '#888888' },
+      { id: 4, name: 'Wood', color: '#8B5D2B' }
+    ];
 
-  <script>
-    const STONE = 1, DIRT = 2, GRASS = 3, WOOD = 4, IRON = 8, DIAMOND = 10;
-    const COLORS = { 1: '#888888', 2: '#8B6F47', 3: '#5BA93C', 4: '#654321', 8: '#A68A64', 10: '#5CCFE7' };
-    const NAMES = { 1: 'Stone', 2: 'Dirt', 3: 'Grass', 4: 'Wood', 8: 'Iron', 10: 'Diamond' };
+    const inventory = [
+      { block: BLOCKS[0], count: 32 },
+      { block: BLOCKS[1], count: 20 },
+      { block: BLOCKS[2], count: 12 },
+      { block: BLOCKS[3], count: 16 }
+    ];
 
-    const canvas = document.getElementById('game');
-    const ctx = canvas.getContext('2d');
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-
-    let chunks = {};
-    let playerX = 0, playerY = 35, playerZ = 0;
-    let playerPitch = -0.3, playerYaw = 0;
-    let velocityY = 0;
-    let keys = {};
-    let mouseDown = false, mouseButton = 0;
     let selectedSlot = 0;
-    let inventory = [{ id: WOOD, count: 32 }];
-    let frameCount = 0, fpsTime = Date.now(), fpsCounter = 0;
+    const world = new Map();
+    const SIZE = 10;
 
-    function loadChunk(cx, cz) {
-      const key = cx + ',' + cz;
-      if (chunks[key]) return chunks[key];
-      
-      const chunk = {};
-      for (let x = 0; x < 16; x++) {
-        for (let z = 0; z < 16; z++) {
-          const wx = cx * 16 + x;
-          const wz = cz * 16 + z;
-          const h = Math.floor(30 + Math.sin(wx * 0.1) * 5 + Math.cos(wz * 0.1) * 5);
-          
-          for (let y = 0; y < h - 3; y++) chunk[x + ',' + y + ',' + z] = STONE;
-          for (let y = h - 3; y < h - 1; y++) chunk[x + ',' + y + ',' + z] = DIRT;
-          if (h - 1 >= 0) chunk[x + ',' + (h - 1) + ',' + z] = GRASS;
-
-          // Ore generation
-          if (Math.random() > 0.98 && h > 20) chunk[x + ',' + Math.floor(h - 10) + ',' + z] = IRON;
-          if (Math.random() > 0.99 && h > 30) chunk[x + ',' + Math.floor(h - 20) + ',' + z] = DIAMOND;
-        }
+    for (let x = -SIZE; x <= SIZE; x++) {
+      for (let z = -SIZE; z <= SIZE; z++) {
+        world.set(`${x},0,${z}`, BLOCKS[0]);
       }
-      
-      chunks[key] = chunk;
-      return chunk;
     }
 
-    function getBlock(x, y, z) {
-      const cx = Math.floor(x / 16);
-      const cz = Math.floor(z / 16);
-      const lx = ((x % 16) + 16) % 16;
-      const lz = ((z % 16) + 16) % 16;
-      const chunk = loadChunk(cx, cz);
-      return chunk[lx + ',' + y + ',' + lz] || 0;
+    const camera = {
+      x: 0,
+      y: 9,
+      z: -12,
+      yaw: 0,
+      pitch: -0.35,
+      speed: 0.18,
+      vy: 0,
+      crouch: false
+    };
+
+    const keys = {};
+
+    function project(point) {
+      const dx = point.x - camera.x;
+      const dy = point.y - camera.y;
+      const dz = point.z - camera.z;
+      const cosY = Math.cos(camera.yaw);
+      const sinY = Math.sin(camera.yaw);
+      const cosP = Math.cos(camera.pitch);
+      const sinP = Math.sin(camera.pitch);
+      const rx = dx * cosY - dz * sinY;
+      const rz = dx * sinY + dz * cosY;
+      const ry = dy;
+      const ty = ry * cosP - rz * sinP;
+      const tz = ry * sinP + rz * cosP;
+      if (tz <= 0.2) return null;
+      const scale = 550 / tz;
+      return {
+        x: canvas.width / 2 + rx * scale,
+        y: canvas.height / 2 - ty * scale,
+        s: scale
+      };
     }
 
-    function setBlock(x, y, z, id) {
-      const cx = Math.floor(x / 16);
-      const cz = Math.floor(z / 16);
-      const lx = ((x % 16) + 16) % 16;
-      const lz = ((z % 16) + 16) % 16;
-      const chunk = loadChunk(cx, cz);
-      chunk[lx + ',' + y + ',' + lz] = id;
+    function corners(x, y, z) {
+      return [
+        { x, y, z },
+        { x + 1, y, z },
+        { x + 1, y + 1, z },
+        { x, y + 1, z },
+        { x, y, z + 1 },
+        { x + 1, y, z + 1 },
+        { x + 1, y + 1, z + 1 },
+        { x, y + 1, z + 1 }
+      ];
     }
 
-    function raycast(dist) {
-      const dx = Math.cos(playerPitch) * Math.sin(playerYaw);
-      const dy = Math.sin(playerPitch);
-      const dz = Math.cos(playerPitch) * Math.cos(playerYaw);
+    const faces = [
+      [0,1,2,3],
+      [4,5,6,7],
+      [0,1,5,4],
+      [3,2,6,7],
+      [0,3,7,4],
+      [1,2,6,5]
+    ];
 
-      for (let d = 0.1; d < dist; d += 0.2) {
-        const x = Math.floor(playerX + dx * d);
-        const y = Math.floor(playerY + dy * d);
-        const z = Math.floor(playerZ + dz * d);
+    function drawBlock(x, y, z, block) {
+      const pts = corners(x, y, z).map(project);
+      if (pts.some(p => p === null)) return;
+      const order = [1,0,2,3,4,5];
+      order.forEach((fi) => {
+        const face = faces[fi].map(i => pts[i]);
+        ctx.beginPath();
+        ctx.moveTo(face[0].x, face[0].y);
+        face.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        const shade = fi === 1 ? 0.82 : (fi === 2 || fi === 3 ? 0.92 : 1);
+        ctx.fillStyle = shadeColor(block.color, shade);
+        ctx.fill();
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      });
+    }
 
-        if (getBlock(x, y, z) !== 0) {
-          return { x, y, z, dx, dy, dz };
-        }
+    function shadeColor(hex, factor) {
+      const num = parseInt(hex.slice(1), 16);
+      const r = Math.round(((num >> 16) & 255) * factor);
+      const g = Math.round(((num >> 8) & 255) * factor);
+      const b = Math.round((num & 255) * factor);
+      return `rgb(${r},${g},${b})`;
+    }
+
+    function drawWorld() {
+      ctx.fillStyle = '#87CEEB';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const drawn = [];
+      world.forEach((block, key) => {
+        const [x,y,z] = key.split(',').map(Number);
+        const center = project({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
+        if (!center) return;
+        drawn.push({ x, y, z, block, depth: center.y });
+      });
+      drawn.sort((a,b) => b.depth - a.depth);
+      drawn.forEach(entry => drawBlock(entry.x, entry.y, entry.z, entry.block));
+    }
+
+    function groundHeight(x, z) {
+      for (let y = 3; y >= 0; y--) {
+        if (world.has(`${x},${y},${z}`)) return y;
       }
-      return null;
+      return -1;
     }
 
     function update() {
-      const speed = 0.15;
       const forward = (keys['w'] ? 1 : 0) - (keys['s'] ? 1 : 0);
       const right = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
+      const dx = Math.sin(camera.yaw) * forward + Math.cos(camera.yaw) * right;
+      const dz = Math.cos(camera.yaw) * forward - Math.sin(camera.yaw) * right;
+      camera.x += dx * camera.speed;
+      camera.z += dz * camera.speed;
+      const ground = groundHeight(Math.floor(camera.x), Math.floor(camera.z));
+      if (!camera.crouch) camera.vy -= 0.012;
+      if (keys[' '] && Math.abs(camera.y - (ground + 2.3)) < 0.18) camera.vy = 0.22;
+      camera.y += camera.vy;
+      if (camera.y < ground + 2.3) {
+        camera.y = ground + 2.3;
+        camera.vy = 0;
+      }
+      if (camera.crouch) camera.y = ground + 1.7;
+    }
 
-      const moveX = Math.cos(playerYaw) * forward + Math.sin(playerYaw) * right;
-      const moveZ = Math.sin(playerYaw) * forward - Math.cos(playerYaw) * right;
-
-      playerX += moveX * speed;
-      playerZ += moveZ * speed;
-
-      // Gravity
-      let groundY = 0;
-      for (let y = 63; y >= 0; y--) {
-        if (getBlock(Math.floor(playerX), y, Math.floor(playerZ)) !== 0) {
-          groundY = y;
-          break;
+    function castRay(maxDistance) {
+      const dir = {
+        x: Math.sin(camera.yaw) * Math.cos(camera.pitch),
+        y: Math.sin(camera.pitch),
+        z: Math.cos(camera.yaw) * Math.cos(camera.pitch)
+      };
+      for (let d = 0.6; d < maxDistance; d += 0.2) {
+        const x = Math.floor(camera.x + dir.x * d);
+        const y = Math.floor(camera.y + dir.y * d);
+        const z = Math.floor(camera.z + dir.z * d);
+        if (world.has(`${x},${y},${z}`)) {
+          return { x, y, z, face: { x: Math.sign(dir.x), y: Math.sign(dir.y), z: Math.sign(dir.z) } };
         }
       }
+      return null;
+    }
 
-      if (playerY > groundY + 1.62) {
-        velocityY -= 0.01;
-      } else {
-        velocityY = 0;
-      }
-
-      if (keys[' '] && playerY <= groundY + 1.62 + 0.1) {
-        velocityY = 0.2;
-      }
-
-      playerY += velocityY;
-      if (playerY < groundY + 1.62) {
-        playerY = groundY + 1.62;
-        velocityY = 0;
+    function placeBlock() {
+      const hit = castRay(6);
+      if (!hit) return;
+      const nx = hit.x + (Math.abs(hit.face.x) > 0 ? hit.face.x : 0);
+      const ny = hit.y + (Math.abs(hit.face.y) > 0 ? hit.face.y : 1);
+      const nz = hit.z + (Math.abs(hit.face.z) > 0 ? hit.face.z : 0);
+      const key = `${nx},${ny},${nz}`;
+      if (!world.has(key)) {
+        world.set(key, inventory[selectedSlot].block);
       }
     }
 
-    function render() {
-      // Draw sky
-      ctx.fillStyle = '#87CEEB';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      const fov = Math.PI / 4;
-      const perspective = canvas.width / (2 * Math.tan(fov / 2));
-      const centerX = canvas.width / 2;
-      const centerY = canvas.height / 2;
-
-      // Collect visible blocks
-      const voxels = [];
-      const chunkX = Math.floor(playerX / 16);
-      const chunkZ = Math.floor(playerZ / 16);
-
-      for (let cx = chunkX - 1; cx <= chunkX + 1; cx++) {
-        for (let cz = chunkZ - 1; cz <= chunkZ + 1; cz++) {
-          const chunk = loadChunk(cx, cz);
-          for (let lx = 0; lx < 16; lx++) {
-            for (let y = 15; y < 45; y++) {
-              for (let lz = 0; lz < 16; lz++) {
-                const blockId = chunk[lx + ',' + y + ',' + lz];
-                if (blockId !== 0) {
-                  const wx = cx * 16 + lx;
-                  const wz = cz * 16 + lz;
-                  const dist = Math.hypot(wx - playerX, y - playerY, wz - playerZ);
-                  if (dist < 50) {
-                    voxels.push({ x: wx, y, z: wz, id: blockId, dist });
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      voxels.sort((a, b) => b.dist - a.dist);
-
-      // Draw blocks
-      for (const v of voxels) {
-        const dx = v.x - playerX;
-        const dy = v.y - playerY;
-        const dz = v.z - playerZ;
-
-        const cosY = Math.cos(playerYaw);
-        const sinY = Math.sin(playerYaw);
-        const cosP = Math.cos(playerPitch);
-        const sinP = Math.sin(playerPitch);
-
-        let rx = dx * cosY - dz * sinY;
-        let rz = dx * sinY + dz * cosY;
-        let ry = dy;
-
-        const ty = ry * cosP - rz * sinP;
-        rz = ry * sinP + rz * cosP;
-
-        if (rz > 0.1) {
-          const sx = centerX + (rx / rz) * perspective;
-          const sy = centerY - (ty / rz) * perspective;
-          const size = Math.max(1, perspective / rz * 0.8);
-
-          ctx.fillStyle = COLORS[v.id] || '#808080';
-          ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
-          ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-          ctx.lineWidth = 0.5;
-          ctx.strokeRect(sx - size / 2, sy - size / 2, size, size);
-        }
-      }
-
-      // Update FPS
-      frameCount++;
-      const now = Date.now();
-      if (now - fpsTime > 200) {
-        fpsCounter = Math.round(frameCount / ((now - fpsTime) / 1000));
-        frameCount = 0;
-        fpsTime = now;
-      }
-      document.getElementById('fps').textContent = fpsCounter;
-      document.getElementById('xyz').textContent = Math.floor(playerX) + ',' + Math.floor(playerY) + ',' + Math.floor(playerZ);
+    function removeBlock() {
+      const hit = castRay(6);
+      if (!hit) return;
+      world.delete(`${hit.x},${hit.y},${hit.z}`);
     }
 
-    function gameLoop() {
+    function renderHotbar() {
+      hotbar.innerHTML = '';
+      inventory.forEach((slot, idx) => {
+        const el = document.createElement('div');
+        el.className = 'slot' + (idx === selectedSlot ? ' active' : '');
+        el.textContent = slot.block.name[0] + (slot.count > 1 ? slot.count : '');
+        hotbar.appendChild(el);
+      });
+    }
+
+    function loop() {
       update();
-      render();
-      requestAnimationFrame(gameLoop);
+      drawWorld();
+      renderHotbar();
+      requestAnimationFrame(loop);
     }
 
-    // Input handlers
     window.addEventListener('keydown', (e) => {
       keys[e.key.toLowerCase()] = true;
-      if (e.key >= '1' && e.key <= '8') selectedSlot = parseInt(e.key) - 1;
+      if (e.key === 'c') camera.crouch = !camera.crouch;
+      if (e.key >= '1' && e.key <= '4') selectedSlot = Number(e.key) - 1;
     });
-    window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
-
+    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
     window.addEventListener('mousemove', (e) => {
-      playerYaw -= e.movementX * 0.004;
-      playerPitch -= e.movementY * 0.004;
-      playerPitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, playerPitch));
+      if (document.pointerLockElement === canvas) {
+        camera.yaw -= e.movementX * 0.002;
+        camera.pitch -= e.movementY * 0.002;
+        camera.pitch = Math.max(-1.3, Math.min(1.3, camera.pitch));
+      }
     });
-
-    document.addEventListener('mousedown', (e) => {
-      mouseDown = true;
-      mouseButton = e.button;
-      canvas.requestPointerLock?.();
+    canvas.addEventListener('click', () => canvas.requestPointerLock());
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 2) placeBlock();
+      if (e.button === 0) removeBlock();
     });
-    document.addEventListener('mouseup', () => mouseDown = false);
-
-    window.addEventListener('resize', () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    });
-
-    gameLoop();
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    renderHotbar();
+    loop();
   </script>
 </body>
 </html><!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Minecraft 3D</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flat Block World</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; overflow: hidden; background: #000; }
-    canvas { display: block; width: 100%; height: 100%; }
-    #hud { position: absolute; bottom: 20px; left: 20px; color: #fff; font-size: 14px; text-shadow: 2px 2px 4px #000; z-index: 10; }
-    #stats { position: absolute; top: 20px; left: 20px; color: #fff; font-size: 13px; text-shadow: 2px 2px 4px #000; line-height: 1.4; }
-    #info { position: absolute; top: 20px; right: 20px; color: #fff; font-size: 12px; text-shadow: 2px 2px 4px #000; text-align: right; line-height: 1.4; }
-    .crosshair { position: absolute; top: 50%; left: 50%; width: 20px; height: 20px; transform: translate(-50%, -50%); pointer-events: none; }
-    .crosshair::before { content: ''; position: absolute; width: 8px; height: 1.5px; background: rgba(255,255,255,0.8); left: 6px; top: 50%; }
-    .crosshair::after { content: ''; position: absolute; width: 1.5px; height: 8px; background: rgba(255,255,255,0.8); left: 50%; top: 6px; }
-    #inventory { margin-top: 8px; display: flex; gap: 4px; }
-    .slot { width: 36px; height: 36px; background: rgba(100,100,100,0.7); border: 2px solid rgba(180,180,180,0.5); display: flex; align-items: center; justify-content: center; font-size: 11px; color: #fff; text-shadow: 1px 1px 2px #000; }
-    .slot.sel { border-color: rgba(255,255,255,0.9); background: rgba(120,120,120,0.9); }
-  </style>
-</head>
-<body>
-  <canvas id="can"></canvas>
-  <div class="crosshair"></div>
-  <div id="stats">
-    <div>FPS: <span id="fps">0</span></div>
-    <div>Pos: <span id="pos">0, 0, 0</span></div>
-  </div>
-  <div id="info">
-    <div>WASD Move | Space Jump | C Crouch</div>
-    <div>LClick Mine | RClick Place</div>
-    <div id="looking">Looking at: Stone</div>
-  </div>
-  <div id="hud">
-    Items:
-    <div id="inventory"></div>
-  </div>
-
-  <script>
-    const BLOCKS = { AIR: 0, STONE: 1, DIRT: 2, GRASS: 3, WOOD: 4, LEAVES: 5, SAND: 6, COAL: 7, IRON: 8, GOLD: 9, DIAMOND: 10 };
-    const COLORS = { 1: 0x888, 2: 0x8B6F47, 3: 0x5BA93C, 4: 0x654321, 5: 0x2D8E2D, 6: 0xD3BC8D, 7: 0x222, 8: 0xA68A64, 9: 0xFFD700, 10: 0x5CCFE7 };
-    const NAMES = { 1: 'Stone', 2: 'Dirt', 3: 'Grass', 4: 'Wood', 5: 'Leaves', 6: 'Sand', 7: 'Coal', 8: 'Iron', 9: 'Gold', 10: 'Diamond' };
-    const DROPS = { 1: 1, 2: 2, 3: 2, 4: 4, 7: 7, 8: 8, 9: 9, 10: 10 };
-
-    class World {
-      constructor() {
-        this.chunks = new Map();
-        this.CSIZE = 16;
-        this.HIGHT = 64;
-      }
-      getChunk(cx, cz) {
-        const key = cx + ',' + cz;
-        if (!this.chunks.has(key)) this.chunks.set(key, this.gen(cx, cz));
-        return this.chunks.get(key);
-      }
-      gen(cx, cz) {
-        const ch = new Uint8Array(this.CSIZE * this.HIGHT * this.CSIZE);
-        for (let x = 0; x < this.CSIZE; x++) {
-          for (let z = 0; z < this.CSIZE; z++) {
-            const wx = cx * this.CSIZE + x, wz = cz * this.CSIZE + z;
-            const h = Math.floor(30 + Math.sin(wx * 0.1) * 5 + Math.cos(wz * 0.1) * 5);
-            for (let y = 0; y < this.HIGHT; y++) {
-              const i = x + y * this.CSIZE + z * this.CSIZE * this.HIGHT;
-              if (y < h - 3) {
-                ch[i] = BLOCKS.STONE;
-                if (y < 10 && Math.random() > 0.97) ch[i] = BLOCKS.DIAMOND;
-                else if (y < 20 && Math.random() > 0.95) ch[i] = BLOCKS.GOLD;
-                else if (y < 30 && Math.random() > 0.93) ch[i] = BLOCKS.IRON;
-                else if (Math.random() > 0.98) ch[i] = BLOCKS.COAL;
-              } else if (y < h - 1) ch[i] = BLOCKS.DIRT;
-              else if (y === h - 1) ch[i] = BLOCKS.GRASS;
-            }
-          }
-        }
-        for (let t = 0; t < 2; t++) {
-          const x = Math.floor(Math.random() * this.CSIZE), z = Math.floor(Math.random() * this.CSIZE);
-          const wx = cx * this.CSIZE + x, wz = cz * this.CSIZE + z;
-          const h = Math.floor(30 + Math.sin(wx * 0.1) * 5 + Math.cos(wz * 0.1) * 5);
-          for (let i = 0; i < 5; i++) {
-            if (h + i < this.HIGHT) ch[x + (h + i) * this.CSIZE + z * this.CSIZE * this.HIGHT] = BLOCKS.WOOD;
-          }
-          for (let dx = -2; dx <= 2; dx++) {
-            for (let dz = -2; dz <= 2; dz++) {
-              if (Math.abs(dx) + Math.abs(dz) <= 2) {
-                const lx = x + dx, lz = z + dz;
-                if (lx >= 0 && lx < this.CSIZE && lz >= 0 && lz < this.CSIZE) {
-                  for (let dy = 0; dy < 3; dy++) {
-                    if (h + 3 + dy < this.HIGHT) ch[lx + (h + 3 + dy) * this.CSIZE + lz * this.CSIZE * this.HIGHT] = BLOCKS.LEAVES;
-                  }
-                }
-              }
-            }
-          }
-        }
-        return ch;
-      }
-      getBlock(x, y, z) {
-        if (y < 0 || y >= this.HIGHT) return BLOCKS.AIR;
-        const cx = Math.floor(x / this.CSIZE), cz = Math.floor(z / this.CSIZE);
-        const lx = ((x % this.CSIZE) + this.CSIZE) % this.CSIZE, lz = ((z % this.CSIZE) + this.CSIZE) % this.CSIZE;
-        const ch = this.getChunk(cx, cz);
-        return ch[lx + y * this.CSIZE + lz * this.CSIZE * this.HIGHT] || BLOCKS.AIR;
-      }
-      setBlock(x, y, z, t) {
-        if (y < 0 || y >= this.HIGHT) return;
-        const cx = Math.floor(x / this.CSIZE), cz = Math.floor(z / this.CSIZE);
-        const lx = ((x % this.CSIZE) + this.CSIZE) % this.CSIZE, lz = ((z % this.CSIZE) + this.CSIZE) % this.CSIZE;
-        const ch = this.getChunk(cx, cz);
-        ch[lx + y * this.CSIZE + lz * this.CSIZE * this.HIGHT] = t;
-      }
-    }
-
-    class Game {
-      constructor() {
-        this.can = document.getElementById('can');
-        this.ctx = this.can.getContext('2d');
-        this.w = new World();
-        this.cam = { x: 0, y: 35, z: 0, p: -0.3, y: 0 };
-        this.vel = { x: 0, y: 0, z: 0 };
-        this.keys = {};
-        this.mouse = { x: 0, y: 0, d: false, b: 0 };
-        this.inv = [{ t: BLOCKS.WOOD, c: 32 }, null, null, null, null, null, null, null];
-        this.sel = 0;
-        this.fps = 0;
-        this.fcount = 0;
-        this.ftime = Date.now();
-        this.resize();
-        this.listen();
-        this.loop();
-      }
-      resize() {
-        this.can.width = window.innerWidth;
-        this.can.height = window.innerHeight;
-      }
-      listen() {
-        window.addEventListener('keydown', e => {
-          this.keys[e.key.toLowerCase()] = true;
-          if (e.key >= '1' && e.key <= '8') this.sel = parseInt(e.key) - 1;
-        });
-        window.addEventListener('keyup', e => this.keys[e.key.toLowerCase()] = false);
-        window.addEventListener('mousemove', e => {
-          this.cam.y -= e.movementX * 0.002;
-          this.cam.p -= e.movementY * 0.002;
-          this.cam.p = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.cam.p));
-        });
-        document.addEventListener('mousedown', e => {
-          this.mouse.d = true;
-          this.mouse.b = e.button;
-          this.can.requestPointerLock?.();
-        });
-        document.addEventListener('mouseup', () => this.mouse.d = false);
-        window.addEventListener('resize', () => this.resize());
-      }
-      update() {
-        const spd = 0.1;
-        const f = (this.keys['w'] ? 1 : 0) - (this.keys['s'] ? 1 : 0);
-        const r = (this.keys['d'] ? 1 : 0) - (this.keys['a'] ? 1 : 0);
-        const mx = Math.cos(this.cam.y) * f + Math.sin(this.cam.y) * r;
-        const mz = Math.sin(this.cam.y) * f - Math.cos(this.cam.y) * r;
-        this.cam.x += mx * spd;
-        this.cam.z += mz * spd;
-        if (!this.onGround()) this.vel.y -= 0.01;
-        if (this.keys[' '] && this.onGround()) this.vel.y = 0.2;
-        this.cam[Object.keys(this.cam)[1]] += this.vel.y;
-        const gy = this.groundH(this.cam.x, this.cam.z);
-        if (this.cam[Object.keys(this.cam)[1]] < gy + 1.62) {
-          this.cam[Object.keys(this.cam)[1]] = gy + 1.62;
-          this.vel.y = 0;
-        }
-        this.interact();
-      }
-      onGround() {
-        return this.cam[Object.keys(this.cam)[1]] <= this.groundH(this.cam.x, this.cam.z) + 1.62 + 0.01;
-      }
-      groundH(x, z) {
-        for (let y = this.w.HIGHT - 1; y >= 0; y--) {
-          if (this.w.getBlock(Math.floor(x), y, Math.floor(z)) !== BLOCKS.AIR) return y;
-        }
-        return 0;
-      }
-      cast(d) {
-        const dx = Math.cos(this.cam.p) * Math.sin(this.cam.y);
-        const dy = Math.sin(this.cam.p);
-        const dz = Math.cos(this.cam.p) * Math.cos(this.cam.y);
-        for (let t = 0.1; t < d; t += 0.1) {
-          const x = Math.floor(this.cam.x + dx * t);
-          const y = Math.floor(this.cam[Object.keys(this.cam)[1]] + dy * t);
-          const z = Math.floor(this.cam.z + dz * t);
-          if (this.w.getBlock(x, y, z) !== BLOCKS.AIR) return { x, y, z, dx, dy, dz };
-        }
-        return null;
-      }
-      interact() {
-        if (!this.mouse.d) return;
-        const h = this.cast(6);
-        if (!h) return;
-        if (this.mouse.b === 0) {
-          const b = this.w.getBlock(h.x, h.y, h.z);
-          this.w.setBlock(h.x, h.y, h.z, BLOCKS.AIR);
-          if (DROPS[b]) this.addInv(DROPS[b]);
-        } else if (this.mouse.b === 2) {
-          const i = this.inv[this.sel];
-          if (i) {
-            const bx = h.x + Math.round(h.dx);
-            const by = h.y + Math.round(h.dy);
-            const bz = h.z + Math.round(h.dz);
-            const dist = Math.hypot(bx - this.cam.x, by - this.cam[Object.keys(this.cam)[1]], bz - this.cam.z);
-            if (dist > 1.5) {
-              this.w.setBlock(bx, by, bz, i.t);
-              i.c--;
-              if (i.c <= 0) this.inv[this.sel] = null;
-            }
-          }
-        }
-      }
-      addInv(t) {
-        for (let i = 0; i < 8; i++) {
-          if (!this.inv[i]) {
-            this.inv[i] = { t, c: 1 };
-            return;
-          } else if (this.inv[i].t === t && this.inv[i].c < 64) {
-            this.inv[i].c++;
-            return;
-          }
-        }
-      }
-      render() {
-        this.ctx.fillStyle = '#87CEEB';
-        this.ctx.fillRect(0, 0, this.can.width, this.can.height);
-        const fov = Math.PI / 4;
-        const per = this.can.width / (2 * Math.tan(fov / 2));
-        const cx = this.can.width / 2, cy = this.can.height / 2;
-        const vx = [];
-        const ccx = Math.floor(this.cam.x / this.w.CSIZE);
-        const ccz = Math.floor(this.cam.z / this.w.CSIZE);
-        for (let c2 = ccx - 1; c2 <= ccx + 1; c2++) {
-          for (let c3 = ccz - 1; c3 <= ccz + 1; c3++) {
-            const ch = this.w.getChunk(c2, c3);
-            for (let x = 0; x < this.w.CSIZE; x++) {
-              for (let y = 20; y < 45; y++) {
-                for (let z = 0; z < this.w.CSIZE; z++) {
-                  const i = x + y * this.w.CSIZE + z * this.w.CSIZE * this.w.HIGHT;
-                  if (ch[i] !== BLOCKS.AIR) {
-                    const wx = c2 * this.w.CSIZE + x;
-                    const wy = y;
-                    const wz = c3 * this.w.CSIZE + z;
-                    const d = Math.hypot(wx - this.cam.x, wy - this.cam[Object.keys(this.cam)[1]], wz - this.cam.z);
-                    if (d < 50) vx.push({ x: wx, y: wy, z: wz, t: ch[i], d });
-                  }
-                }
-              }
-            }
-          }
-        }
-        vx.sort((a, b) => b.d - a.d);
-        for (const v of vx) {
-          const dx = v.x - this.cam.x;
-          const dy = v.y - this.cam[Object.keys(this.cam)[1]];
-          const dz = v.z - this.cam.z;
-          const cosY = Math.cos(this.cam.y);
-          const sinY = Math.sin(this.cam.y);
-          const cosP = Math.cos(this.cam.p);
-          const sinP = Math.sin(this.cam.p);
-          let rx = dx * cosY - dz * sinY;
-          let rz = dx * sinY + dz * cosY;
-          let ry = dy;
-          const ty = ry * cosP - rz * sinP;
-          rz = ry * sinP + rz * cosP;
-          if (rz > 0.1) {
-            const sx = cx + (rx / rz) * per;
-            const sy = cy - (ty / rz) * per;
-            const sz = Math.max(1, per / rz * 0.8);
-            const col = COLORS[v.t] || 0x808080;
-            this.ctx.fillStyle = '#' + col.toString(16).padStart(6, '0');
-            this.ctx.fillRect(sx - sz / 2, sy - sz / 2, sz, sz);
-          }
-        }
-        const n = Date.now();
-        if (n - this.ftime > 100) {
-          this.fps = Math.round(this.fcount / ((n - this.ftime) / 1000));
-          this.fcount = 0;
-          this.ftime = n;
-        }
-        document.getElementById('fps').textContent = this.fps;
-        document.getElementById('pos').textContent = Math.floor(this.cam.x) + ', ' + Math.floor(this.cam[Object.keys(this.cam)[1]]) + ', ' + Math.floor(this.cam.z);
-        const h = this.cast(5);
-        if (h) {
-          const b = this.w.getBlock(h.x, h.y, h.z);
-          document.getElementById('looking').textContent = 'Looking at: ' + (NAMES[b] || 'Block');
-        }
-        const inv = document.getElementById('inventory');
-        inv.innerHTML = '';
-        for (let i = 0; i < 8; i++) {
-          const s = document.createElement('div');
-          s.className = 'slot' + (i === this.sel ? ' sel' : '');
-          if (this.inv[i]) s.textContent = this.inv[i].c;
-          inv.appendChild(s);
-        }
-      }
-      loop() {
-        this.update();
-        this.render();
-        this.fcount++;
-        requestAnimationFrame(() => this.loop());
-      }
-    }
-
-    window.addEventListener('DOMContentLoaded', () => new Game());
-    if (document.readyState !== 'loading') new Game();
-  </script>
-</body>
-</html>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Minecraft 3D</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: 'Arial', sans-serif;
-      overflow: hidden;
-      background: #000;
-    }
-
-    canvas {
-      display: block;
-      width: 100vw;
-      height: 100vh;
-    }
-
-    #hud {
+    body { overflow: hidden; background: #111; color: #fff; font-family: Arial, sans-serif; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #overlay {
       position: absolute;
-      bottom: 20px;
       left: 20px;
-      color: white;
-      font-size: 16px;
-      z-index: 100;
-      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
-      line-height: 1.8;
-    }
-
-    #stats {
-      position: absolute;
       top: 20px;
-      left: 20px;
-      color: white;
-      font-size: 14px;
-      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
-      line-height: 1.6;
-    }
-
-    #info {
-      position: absolute;
-      top: 20px;
-      right: 20px;
-      color: white;
-      font-size: 12px;
-      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
-      text-align: right;
-      line-height: 1.5;
-    }
-
-    .crosshair {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      width: 20px;
-      height: 20px;
-      transform: translate(-50%, -50%);
-      pointer-events: none;
-    }
-
-    .crosshair::before,
-    .crosshair::after {
-      content: '';
-      position: absolute;
-      background: rgba(255, 255, 255, 0.8);
-    }
-
-    .crosshair::before {
-      width: 10px;
-      height: 2px;
-      left: 5px;
-      top: 50%;
-      transform: translateY(-50%);
-    }
-
-    .crosshair::after {
-      width: 2px;
-      height: 10px;
-      left: 50%;
-      top: 5px;
-      transform: translateX(-50%);
-    }
-
-    #inventory {
-      margin-top: 10px;
-      display: flex;
-      gap: 4px;
-      justify-content: center;
-    }
-
-    .inv-slot {
-      width: 40px;
-      height: 40px;
-      background: rgba(100, 100, 100, 0.7);
-      border: 2px solid rgba(200, 200, 200, 0.3);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 11px;
-      cursor: pointer;
-      color: white;
-      text-shadow: 1px 1px 2px #000;
-    }
-
-    .inv-slot.selected {
-      border-color: rgba(255, 255, 255, 0.9);
-      background: rgba(150, 150, 150, 0.9);
-      transform: scale(1.1);
-    }
-  </style>
-</head>
-<body>
-  <canvas id="gameCanvas"></canvas>
-  <div class="crosshair"></div>
-
-  <div id="stats">
-    <div>FPS: <span id="fps">0</span></div>
-    <div>Pos: <span id="pos">0, 0, 0</span></div>
-  </div>
-
-  <div id="info">
-    <div>WASD: Move | Space: Jump | C: Crouch</div>
-    <div>LMB: Mine | RMB: Place | 1-8: Select</div>
-    <div id="block-info"></div>
-  </div>
-
-  <div id="hud">
-    Items:
-    <div id="inventory"></div>
-  </div>
-
-  <script>
-    const BLOCKS = {
-      AIR: 0,
-      STONE: 1,
-      DIRT: 2,
-      GRASS: 3,
-      WOOD: 4,
-      LEAVES: 5,
-      SAND: 6,
-      COAL_ORE: 7,
-      IRON_ORE: 8,
-      GOLD_ORE: 9,
-      DIAMOND_ORE: 10,
-    };
-
-    const COLORS = {
-      [BLOCKS.STONE]: 0x808080,
-      [BLOCKS.DIRT]: 0x8B6F47,
-      [BLOCKS.GRASS]: 0x5BA93C,
-      [BLOCKS.WOOD]: 0x8B5D2B,
-      [BLOCKS.LEAVES]: 0x2D8E2D,
-      [BLOCKS.SAND]: 0xD3BC8D,
-      [BLOCKS.COAL_ORE]: 0x1a1a1a,
-      [BLOCKS.IRON_ORE]: 0xC0A080,
-      [BLOCKS.GOLD_ORE]: 0xFFD700,
-      [BLOCKS.DIAMOND_ORE]: 0x5CCFE7,
-    };
-
-    const NAMES = {
-      [BLOCKS.STONE]: 'Stone',
-      [BLOCKS.DIRT]: 'Dirt',
-      [BLOCKS.GRASS]: 'Grass',
-      [BLOCKS.WOOD]: 'Wood',
-      [BLOCKS.LEAVES]: 'Leaves',
-      [BLOCKS.SAND]: 'Sand',
-      [BLOCKS.COAL_ORE]: 'Coal',
-      [BLOCKS.IRON_ORE]: 'Iron',
-      [BLOCKS.GOLD_ORE]: 'Gold',
-      [BLOCKS.DIAMOND_ORE]: 'Diamond',
-    };
-
-    const DROPS = {
-      [BLOCKS.GRASS]: BLOCKS.DIRT,
-      [BLOCKS.STONE]: BLOCKS.STONE,
-      [BLOCKS.WOOD]: BLOCKS.WOOD,
-      [BLOCKS.COAL_ORE]: BLOCKS.COAL_ORE,
-      [BLOCKS.IRON_ORE]: BLOCKS.IRON_ORE,
-      [BLOCKS.GOLD_ORE]: BLOCKS.GOLD_ORE,
-      [BLOCKS.DIAMOND_ORE]: BLOCKS.DIAMOND_ORE,
-    };
-
-    class World {
-      constructor() {
-        this.chunks = new Map();
-        this.CHUNK_SIZE = 16;
-        this.CHUNK_HEIGHT = 64;
-      }
-
-      getChunk(cx, cz) {
-        const key = `${cx},${cz}`;
-        if (!this.chunks.has(key)) {
-          this.chunks.set(key, this.generateChunk(cx, cz));
-        }
-        return this.chunks.get(key);
-      }
-
-      generateChunk(cx, cz) {
-        const chunk = new Uint8Array(this.CHUNK_SIZE * this.CHUNK_HEIGHT * this.CHUNK_SIZE);
-        
-        for (let x = 0; x < this.CHUNK_SIZE; x++) {
-          for (let z = 0; z < this.CHUNK_SIZE; z++) {
-            const wx = cx * this.CHUNK_SIZE + x;
-            const wz = cz * this.CHUNK_SIZE + z;
-            const h = Math.floor(30 + Math.sin(wx * 0.1) * 5 + Math.cos(wz * 0.1) * 5);
-
-            for (let y = 0; y < this.CHUNK_HEIGHT; y++) {
-              const idx = x + y * this.CHUNK_SIZE + z * this.CHUNK_SIZE * this.CHUNK_HEIGHT;
-              
-              if (y < h - 3) {
-                chunk[idx] = BLOCKS.STONE;
-                if (y < 10 && Math.random() > 0.97) chunk[idx] = BLOCKS.DIAMOND_ORE;
-                else if (y < 20 && Math.random() > 0.95) chunk[idx] = BLOCKS.GOLD_ORE;
-                else if (y < 30 && Math.random() > 0.93) chunk[idx] = BLOCKS.IRON_ORE;
-                else if (Math.random() > 0.98) chunk[idx] = BLOCKS.COAL_ORE;
-              } else if (y < h - 1) {
-                chunk[idx] = BLOCKS.DIRT;
-              } else if (y === h - 1) {
-                chunk[idx] = BLOCKS.GRASS;
-              }
-            }
-          }
-        }
-
-        // Add trees
-        for (let i = 0; i < 2; i++) {
-          const x = Math.floor(Math.random() * this.CHUNK_SIZE);
-          const z = Math.floor(Math.random() * this.CHUNK_SIZE);
-          const wx = cx * this.CHUNK_SIZE + x;
-          const wz = cz * this.CHUNK_SIZE + z;
-          const h = Math.floor(30 + Math.sin(wx * 0.1) * 5 + Math.cos(wz * 0.1) * 5);
-          
-          for (let i = 0; i < 5; i++) {
-            if (h + i < this.CHUNK_HEIGHT) {
-              const idx = x + (h + i) * this.CHUNK_SIZE + z * this.CHUNK_SIZE * this.CHUNK_HEIGHT;
-              chunk[idx] = BLOCKS.WOOD;
-            }
-          }
-
-          for (let dx = -2; dx <= 2; dx++) {
-            for (let dz = -2; dz <= 2; dz++) {
-              if (Math.abs(dx) + Math.abs(dz) <= 2) {
-                const lx = x + dx;
-                const lz = z + dz;
-                if (lx >= 0 && lx < this.CHUNK_SIZE && lz >= 0 && lz < this.CHUNK_SIZE) {
-                  for (let dy = 0; dy < 3; dy++) {
-                    if (h + 3 + dy < this.CHUNK_HEIGHT) {
-                      const idx = lx + (h + 3 + dy) * this.CHUNK_SIZE + lz * this.CHUNK_SIZE * this.CHUNK_HEIGHT;
-                      chunk[idx] = BLOCKS.LEAVES;
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        return chunk;
-      }
-
-      getBlock(x, y, z) {
-        if (y < 0 || y >= this.CHUNK_HEIGHT) return BLOCKS.AIR;
-        
-        const cx = Math.floor(x / this.CHUNK_SIZE);
-        const cz = Math.floor(z / this.CHUNK_SIZE);
-        const lx = ((x % this.CHUNK_SIZE) + this.CHUNK_SIZE) % this.CHUNK_SIZE;
-        const lz = ((z % this.CHUNK_SIZE) + this.CHUNK_SIZE) % this.CHUNK_SIZE;
-
-        const chunk = this.getChunk(cx, cz);
-        const idx = lx + y * this.CHUNK_SIZE + lz * this.CHUNK_SIZE * this.CHUNK_HEIGHT;
-        return chunk[idx] || BLOCKS.AIR;
-      }
-
-      setBlock(x, y, z, type) {
-        if (y < 0 || y >= this.CHUNK_HEIGHT) return;
-        
-        const cx = Math.floor(x / this.CHUNK_SIZE);
-        const cz = Math.floor(z / this.CHUNK_SIZE);
-        const lx = ((x % this.CHUNK_SIZE) + this.CHUNK_SIZE) % this.CHUNK_SIZE;
-        const lz = ((z % this.CHUNK_SIZE) + this.CHUNK_SIZE) % this.CHUNK_SIZE;
-
-        const chunk = this.getChunk(cx, cz);
-        const idx = lx + y * this.CHUNK_SIZE + lz * this.CHUNK_SIZE * this.CHUNK_HEIGHT;
-        chunk[idx] = type;
-      }
-    }
-
-    class Game {
-      constructor() {
-        this.canvas = document.getElementById('gameCanvas');
-        this.ctx = this.canvas.getContext('2d');
-        this.world = new World();
-
-        this.camera = { x: 0, y: 35, z: 0, pitch: -0.3, yaw: 0 };
-        this.velocity = { x: 0, y: 0, z: 0 };
-        this.keys = {};
-        this.mouse = { x: 0, y: 0, down: false, button: 0 };
-
-        this.inventory = [
-          { type: BLOCKS.WOOD, count: 32 },
-          null, null, null, null, null, null, null
-        ];
-        this.selected = 0;
-
-        this.fps = 0;
-        this.frameCount = 0;
-        this.lastFpsTime = Date.now();
-
-        this.setupListeners();
-        this.resizeCanvas();
-        this.gameLoop();
-      }
-
-      resizeCanvas() {
-        this.canvas.width = window.innerWidth;
-        this.canvas.height = window.innerHeight;
-      }
-
-      setupListeners() {
-        window.addEventListener('keydown', (e) => {
-          this.keys[e.key.toLowerCase()] = true;
-          if (e.key >= '1' && e.key <= '8') {
-            this.selected = parseInt(e.key) - 1;
-          }
-          if (e.key === 'c' || e.key === 'C') {
-            this.camera.y -= 0.3;
-          }
-        });
-
-        window.addEventListener('keyup', (e) => {
-          this.keys[e.key.toLowerCase()] = false;
-        });
-
-        window.addEventListener('mousemove', (e) => {
-          this.camera.yaw -= e.movementX * 0.002;
-          this.camera.pitch -= e.movementY * 0.002;
-          this.camera.pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, this.camera.pitch));
-        });
-
-        document.addEventListener('mousedown', (e) => {
-          this.mouse.down = true;
-          this.mouse.button = e.button;
-          this.canvas.requestPointerLock = this.canvas.requestPointerLock || this.canvas.mozRequestPointerLock;
-          this.canvas.requestPointerLock?.call(this.canvas);
-        });
-
-        document.addEventListener('mouseup', () => {
-          this.mouse.down = false;
-        });
-
-        window.addEventListener('resize', () => this.resizeCanvas());
-      }
-
-      update() {
-        const speed = 0.1;
-        const forward = (this.keys['w'] ? 1 : 0) - (this.keys['s'] ? 1 : 0);
-        const right = (this.keys['d'] ? 1 : 0) - (this.keys['a'] ? 1 : 0);
-
-        const moveX = Math.cos(this.camera.yaw) * forward + Math.sin(this.camera.yaw) * right;
-        const moveZ = Math.sin(this.camera.yaw) * forward - Math.cos(this.camera.yaw) * right;
-
-        this.camera.x += moveX * speed;
-        this.camera.z += moveZ * speed;
-
-        if (!this.isOnGround()) {
-          this.velocity.y -= 0.01;
-        }
-        if (this.keys[' '] && this.isOnGround()) {
-          this.velocity.y = 0.2;
-        }
-
-        this.camera.y += this.velocity.y;
-        const groundY = this.getGroundHeight(this.camera.x, this.camera.z);
-        if (this.camera.y < groundY + 1.62) {
-          this.camera.y = groundY + 1.62;
-          this.velocity.y = 0;
-        }
-
-        this.handleInteraction();
-      }
-
-      isOnGround() {
-        const groundY = this.getGroundHeight(this.camera.x, this.camera.z);
-        return this.camera.y <= groundY + 1.62 + 0.01;
-      }
-
-      getGroundHeight(x, z) {
-        for (let y = this.world.CHUNK_HEIGHT - 1; y >= 0; y--) {
-          if (this.world.getBlock(Math.floor(x), y, Math.floor(z)) !== BLOCKS.AIR) {
-            return y;
-          }
-        }
-        return 0;
-      }
-
-      raycast(dist) {
-        const dx = Math.cos(this.camera.pitch) * Math.sin(this.camera.yaw);
-        const dy = Math.sin(this.camera.pitch);
-        const dz = Math.cos(this.camera.pitch) * Math.cos(this.camera.yaw);
-
-        for (let d = 0.1; d < dist; d += 0.1) {
-          const x = Math.floor(this.camera.x + dx * d);
-          const y = Math.floor(this.camera.y + dy * d);
-          const z = Math.floor(this.camera.z + dz * d);
-
-          if (this.world.getBlock(x, y, z) !== BLOCKS.AIR) {
-            return { x, y, z, dx, dy, dz };
-          }
-        }
-        return null;
-      }
-
-      handleInteraction() {
-        if (!this.mouse.down) return;
-
-        const hit = this.raycast(6);
-        if (!hit) return;
-
-        if (this.mouse.button === 0) {
-          const block = this.world.getBlock(hit.x, hit.y, hit.z);
-          this.world.setBlock(hit.x, hit.y, hit.z, BLOCKS.AIR);
-          
-          if (DROPS[block]) {
-            this.addInventory(DROPS[block]);
-          }
-        } else if (this.mouse.button === 2) {
-          const inv = this.inventory[this.selected];
-          if (inv) {
-            const bx = hit.x + Math.round(hit.dx);
-            const by = hit.y + Math.round(hit.dy);
-            const bz = hit.z + Math.round(hit.dz);
-            
-            const dist = Math.hypot(bx - this.camera.x, by - this.camera.y, bz - this.camera.z);
-            if (dist > 1.5) {
-              this.world.setBlock(bx, by, bz, inv.type);
-              inv.count--;
-              if (inv.count <= 0) this.inventory[this.selected] = null;
-            }
-          }
-        }
-      }
-
-      addInventory(type) {
-        for (let i = 0; i < 8; i++) {
-          if (!this.inventory[i]) {
-            this.inventory[i] = { type, count: 1 };
-            return;
-          } else if (this.inventory[i].type === type && this.inventory[i].count < 64) {
-            this.inventory[i].count++;
-            return;
-          }
-        }
-      }
-
-      render() {
-        // Sky
-        this.ctx.fillStyle = '#87CEEB';
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-        const fov = Math.PI / 4;
-        const perspective = this.canvas.width / (2 * Math.tan(fov / 2));
-        const centerX = this.canvas.width / 2;
-        const centerY = this.canvas.height / 2;
-
-        // Render chunks
-        const voxels = [];
-        const cx = Math.floor(this.camera.x / this.world.CHUNK_SIZE);
-        const cz = Math.floor(this.camera.z / this.world.CHUNK_SIZE);
-
-        for (let ccx = cx - 1; ccx <= cx + 1; ccx++) {
-          for (let ccz = cz - 1; ccz <= cz + 1; ccz++) {
-            const chunk = this.world.getChunk(ccx, ccz);
-            for (let x = 0; x < this.world.CHUNK_SIZE; x++) {
-              for (let y = 20; y < 45; y++) {
-                for (let z = 0; z < this.world.CHUNK_SIZE; z++) {
-                  const idx = x + y * this.world.CHUNK_SIZE + z * this.world.CHUNK_SIZE * this.world.CHUNK_HEIGHT;
-                  if (chunk[idx] !== BLOCKS.AIR) {
-                    const wx = ccx * this.world.CHUNK_SIZE + x;
-                    const wy = y;
-                    const wz = ccz * this.world.CHUNK_SIZE + z;
-
-                    const dist = Math.hypot(wx - this.camera.x, wy - this.camera.y, wz - this.camera.z);
-                    if (dist < 50) {
-                      voxels.push({ x: wx, y: wy, z: wz, type: chunk[idx], dist });
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        voxels.sort((a, b) => b.dist - a.dist);
-
-        for (const v of voxels) {
-          const dx = v.x - this.camera.x;
-          const dy = v.y - this.camera.y;
-          const dz = v.z - this.camera.z;
-
-          const cosY = Math.cos(this.camera.yaw);
-          const sinY = Math.sin(this.camera.yaw);
-          const cosP = Math.cos(this.camera.pitch);
-          const sinP = Math.sin(this.camera.pitch);
-
-          let rx = dx * cosY - dz * sinY;
-          let rz = dx * sinY + dz * cosY;
-          let ry = dy;
-
-          const ty = ry * cosP - rz * sinP;
-          rz = ry * sinP + rz * cosP;
-
-          if (rz > 0.1) {
-            const sx = centerX + (rx / rz) * perspective;
-            const sy = centerY - (ty / rz) * perspective;
-            const size = Math.max(1, perspective / rz * 0.8);
-
-            const color = COLORS[v.type] || 0x808080;
-            this.ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
-            this.ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
-          }
-        }
-
-        this.updateHUD();
-      }
-
-      updateHUD() {
-        const now = Date.now();
-        if (now - this.lastFpsTime > 100) {
-          this.fps = Math.round(this.frameCount / ((now - this.lastFpsTime) / 1000));
-          this.frameCount = 0;
-          this.lastFpsTime = now;
-        }
-
-        document.getElementById('fps').textContent = this.fps;
-        document.getElementById('pos').textContent = 
-          `${this.camera.x.toFixed(1)}, ${this.camera.y.toFixed(1)}, ${this.camera.z.toFixed(1)}`;
-
-        const hit = this.raycast(5);
-        if (hit) {
-          const block = this.world.getBlock(hit.x, hit.y, hit.z);
-          document.getElementById('block-info').textContent = `Looking at: ${NAMES[block] || 'Block'}`;
-        }
-
-        const inv = document.getElementById('inventory');
-        inv.innerHTML = '';
-        for (let i = 0; i < 8; i++) {
-          const slot = document.createElement('div');
-          slot.className = 'inv-slot' + (i === this.selected ? ' selected' : '');
-          if (this.inventory[i]) {
-            slot.textContent = this.inventory[i].count;
-          }
-          inv.appendChild(slot);
-        }
-      }
-
-      gameLoop() {
-        this.update();
-        this.render();
-        this.frameCount++;
-        requestAnimationFrame(() => this.gameLoop());
-      }
-    }
-
-    window.addEventListener('DOMContentLoaded', () => {
-      new Game();
-    });
-
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => {
-        if (!window.gameStarted) {
-          window.gameStarted = true;
-          new Game();
-        }
-      });
-    } else {
-      if (!window.gameStarted) {
-        window.gameStarted = true;
-        new Game();
-      }
-    }
-  </script>
-</body>
-</html>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Minecraft 3D Game</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: 'Arial', sans-serif;
-      overflow: hidden;
-      background: #000;
-    }
-
-    canvas {
-      display: block;
-      width: 100vw;
-      height: 100vh;
-    }
-
-    #hud {
-      position: absolute;
-      bottom: 20px;
-      left: 20px;
-      right: 20px;
-      color: white;
-      font-size: 16px;
-      z-index: 100;
-      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
-    }
-
-    #inventory {
-      display: flex;
-      gap: 8px;
-      margin-top: 10px;
-      justify-content: center;
-    }
-
-    .inventory-slot {
-      width: 40px;
-      height: 40px;
-      background: rgba(100, 100, 100, 0.7);
-      border: 2px solid rgba(200, 200, 200, 0.3);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 12px;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .inventory-slot.selected {
-      border-color: rgba(255, 255, 255, 0.8);
-      background: rgba(150, 150, 150, 0.8);
-      transform: scale(1.1);
-    }
-
-    #stats {
-      position: absolute;
-      top: 20px;
-      left: 20px;
-      color: white;
-      font-size: 14px;
-      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
-      line-height: 1.6;
-    }
-
-    #info {
-      position: absolute;
-      top: 20px;
-      right: 20px;
-      color: white;
-      font-size: 12px;
-      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
-      text-align: right;
-      line-height: 1.5;
-    }
-
-    .crosshair {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 20px;
-      height: 20px;
-      pointer-events: none;
-    }
-
-    .crosshair::before,
-    .crosshair::after {
-      content: '';
-      position: absolute;
-      background: rgba(255, 255, 255, 0.7);
-    }
-
-    .crosshair::before {
-      width: 10px;
-      height: 2px;
-      left: 5px;
-      top: 50%;
-      transform: translateY(-50%);
-    }
-
-    .crosshair::after {
-      width: 2px;
-      height: 10px;
-      left: 50%;
-      top: 5px;
-      transform: translateX(-50%);
-    }
-  </style>
-</head>
-<body>
-  <canvas id="gameCanvas"></canvas>
-  <div class="crosshair"></div>
-  
-  <div id="stats">
-    <div>FPS: <span id="fps">60</span></div>
-    <div>Health: <span id="health">20</span></div>
-    <div>Hunger: <span id="hunger">20</span></div>
-  </div>
-
-  <div id="info">
-    <div>W/A/S/D: Move</div>
-    <div>Space: Jump | C: Crouch</div>
-    <div>Left Click: Mine | Right Click: Build</div>
-    <div>1-8: Select item</div>
-    <div id="blockInfo"></div>
-  </div>
-
-  <div id="hud">
-    <div id="hudText"></div>
-    <div id="inventory"></div>
-  </div>
-
-  <script>
-    // ==================== CONSTANTS ====================
-    const BLOCK_TYPES = {
-      AIR: 0,
-      GRASS: 1,
-      DIRT: 2,
-      STONE: 3,
-      OAK_WOOD: 4,
-      OAK_LEAVES: 5,
-      SAND: 6,
-      GRAVEL: 7,
-      COAL_ORE: 8,
-      IRON_ORE: 9,
-      GOLD_ORE: 10,
-      DIAMOND_ORE: 11,
-      COBBLESTONE: 12,
-      CRAFTING_TABLE: 13,
-      FURNACE: 14,
-      TORCH: 15,
-      OAK_LOG: 16,
-      PLANKS: 17,
-      OBSIDIAN: 18,
-    };
-
-    const BLOCK_COLORS = {
-      [BLOCK_TYPES.GRASS]: { top: 0x4a7c4e, side: 0x5a6d3a },
-      [BLOCK_TYPES.DIRT]: 0x6d4c2d,
-      [BLOCK_TYPES.STONE]: 0x808080,
-      [BLOCK_TYPES.OAK_WOOD]: 0x8b7355,
-      [BLOCK_TYPES.OAK_LEAVES]: 0x2d8e2d,
-      [BLOCK_TYPES.SAND]: 0xd4a574,
-      [BLOCK_TYPES.GRAVEL]: 0x8b8680,
-      [BLOCK_TYPES.COAL_ORE]: 0x4a4a4a,
-      [BLOCK_TYPES.IRON_ORE]: 0xc9a961,
-      [BLOCK_TYPES.GOLD_ORE]: 0xc9a961,
-      [BLOCK_TYPES.DIAMOND_ORE]: 0x5eb3d6,
-      [BLOCK_TYPES.COBBLESTONE]: 0x7a7a7a,
-      [BLOCK_TYPES.CRAFTING_TABLE]: 0x8b4513,
-      [BLOCK_TYPES.FURNACE]: 0x4a4a4a,
-      [BLOCK_TYPES.TORCH]: 0xff8c00,
-      [BLOCK_TYPES.OAK_LOG]: 0x5c3d1f,
-      [BLOCK_TYPES.PLANKS]: 0xaa8855,
-      [BLOCK_TYPES.OBSIDIAN]: 0x0a0a1a,
-    };
-
-    const ITEM_DROPS = {
-      [BLOCK_TYPES.GRASS]: { item: BLOCK_TYPES.DIRT, chance: 1 },
-      [BLOCK_TYPES.STONE]: { item: BLOCK_TYPES.COBBLESTONE, chance: 1 },
-      [BLOCK_TYPES.OAK_WOOD]: { item: BLOCK_TYPES.OAK_LOG, chance: 1 },
-      [BLOCK_TYPES.OAK_LEAVES]: { item: BLOCK_TYPES.OAK_LOG, chance: 0.1 },
-      [BLOCK_TYPES.COAL_ORE]: { item: BLOCK_TYPES.COAL_ORE, chance: 1 },
-      [BLOCK_TYPES.IRON_ORE]: { item: BLOCK_TYPES.IRON_ORE, chance: 0.8 },
-      [BLOCK_TYPES.GOLD_ORE]: { item: BLOCK_TYPES.GOLD_ORE, chance: 0.9 },
-      [BLOCK_TYPES.DIAMOND_ORE]: { item: BLOCK_TYPES.DIAMOND_ORE, chance: 1 },
-      [BLOCK_TYPES.OAK_LOG]: { item: BLOCK_TYPES.OAK_LOG, chance: 1 },
-      [BLOCK_TYPES.COBBLESTONE]: { item: BLOCK_TYPES.COBBLESTONE, chance: 1 },
-      [BLOCK_TYPES.PLANKS]: { item: BLOCK_TYPES.PLANKS, chance: 1 },
-    };
-
-    const ITEM_NAMES = {
-      [BLOCK_TYPES.DIRT]: 'Dirt',
-      [BLOCK_TYPES.STONE]: 'Stone',
-      [BLOCK_TYPES.OAK_LOG]: 'Oak Log',
-      [BLOCK_TYPES.PLANKS]: 'Planks',
-      [BLOCK_TYPES.COAL_ORE]: 'Coal',
-      [BLOCK_TYPES.IRON_ORE]: 'Iron Ore',
-      [BLOCK_TYPES.GOLD_ORE]: 'Gold Ore',
-      [BLOCK_TYPES.DIAMOND_ORE]: 'Diamond',
-      [BLOCK_TYPES.COBBLESTONE]: 'Cobblestone',
-      [BLOCK_TYPES.CRAFTING_TABLE]: 'Crafting Table',
-      [BLOCK_TYPES.FURNACE]: 'Furnace',
-      [BLOCK_TYPES.PLANKS]: 'Planks',
-    };
-
-    // ==================== WORLD GENERATION ====================
-    class World {
-      constructor(seed = 12345) {
-        this.seed = seed;
-        this.chunks = new Map();
-        this.CHUNK_SIZE = 16;
-        this.CHUNK_HEIGHT = 128;
-      }
-
-      getChunkKey(x, z) {
-        return `${x},${z}`;
-      }
-
-      getChunk(chunkX, chunkZ) {
-        const key = this.getChunkKey(chunkX, chunkZ);
-        if (!this.chunks.has(key)) {
-          this.chunks.set(key, this.generateChunk(chunkX, chunkZ));
-        }
-        return this.chunks.get(key);
-      }
-
-      generateChunk(chunkX, chunkZ) {
-        const chunk = new Uint8Array(this.CHUNK_SIZE * this.CHUNK_HEIGHT * this.CHUNK_SIZE);
-        
-        for (let x = 0; x < this.CHUNK_SIZE; x++) {
-          for (let z = 0; z < this.CHUNK_SIZE; z++) {
-            const worldX = chunkX * this.CHUNK_SIZE + x;
-            const worldZ = chunkZ * this.CHUNK_SIZE + z;
-            const noise = this.getTerrainHeight(worldX, worldZ);
-            
-            for (let y = 0; y < this.CHUNK_HEIGHT; y++) {
-              const idx = x + y * this.CHUNK_SIZE + z * this.CHUNK_SIZE * this.CHUNK_HEIGHT;
-              
-              if (y < noise - 4) {
-                chunk[idx] = BLOCK_TYPES.STONE;
-                
-                // Ore generation
-                if (y < 16 && Math.random() > 0.97) chunk[idx] = BLOCK_TYPES.DIAMOND_ORE;
-                else if (y < 32 && Math.random() > 0.95) chunk[idx] = BLOCK_TYPES.GOLD_ORE;
-                else if (y < 64 && Math.random() > 0.93) chunk[idx] = BLOCK_TYPES.IRON_ORE;
-                else if (y < 80 && Math.random() > 0.95) chunk[idx] = BLOCK_TYPES.COAL_ORE;
-              } else if (y < noise) {
-                chunk[idx] = BLOCK_TYPES.DIRT;
-              } else if (y === noise) {
-                chunk[idx] = BLOCK_TYPES.GRASS;
-              } else if (y === noise + 1 && Math.random() > 0.7) {
-                // Grass
-                chunk[idx] = BLOCK_TYPES.OAK_LEAVES;
-              } else {
-                chunk[idx] = BLOCK_TYPES.AIR;
-              }
-            }
-          }
-        }
-        
-        // Trees
-        for (let i = 0; i < 3; i++) {
-          const x = Math.floor(Math.random() * this.CHUNK_SIZE);
-          const z = Math.floor(Math.random() * this.CHUNK_SIZE);
-          const worldX = chunkX * this.CHUNK_SIZE + x;
-          const worldZ = chunkZ * this.CHUNK_SIZE + z;
-          const h = this.getTerrainHeight(worldX, worldZ);
-          this.plantTree(chunk, x, Math.floor(h), z, chunkX, chunkZ);
-        }
-        
-        return chunk;
-      }
-
-      plantTree(chunk, x, y, z, chunkX, chunkZ) {
-        if (y + 8 >= this.CHUNK_HEIGHT) return;
-        
-        // Trunk
-        for (let i = 0; i < 5; i++) {
-          if (y + i < this.CHUNK_HEIGHT) {
-            const idx = x + (y + i) * this.CHUNK_SIZE + z * this.CHUNK_SIZE * this.CHUNK_HEIGHT;
-            chunk[idx] = BLOCK_TYPES.OAK_LOG;
-          }
-        }
-        
-        // Leaves
-        const leafY = y + 3;
-        for (let dx = -2; dx <= 2; dx++) {
-          for (let dz = -2; dz <= 2; dz++) {
-            if (Math.abs(dx) + Math.abs(dz) <= 3) {
-              const lx = x + dx;
-              const lz = z + dz;
-              if (lx >= 0 && lx < this.CHUNK_SIZE && lz >= 0 && lz < this.CHUNK_SIZE) {
-                for (let dy = 0; dy < 3; dy++) {
-                  if (leafY + dy < this.CHUNK_HEIGHT) {
-                    const idx = lx + (leafY + dy) * this.CHUNK_SIZE + lz * this.CHUNK_SIZE * this.CHUNK_HEIGHT;
-                    if (chunk[idx] === BLOCK_TYPES.AIR) chunk[idx] = BLOCK_TYPES.OAK_LEAVES;
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      getTerrainHeight(x, z) {
-        return Math.floor(Math.sin(x * 0.1) * 10 + Math.cos(z * 0.1) * 10 + 60);
-      }
-
-      getBlock(x, y, z) {
-        if (y < 0 || y >= this.CHUNK_HEIGHT) return BLOCK_TYPES.AIR;
-        
-        const chunkX = Math.floor(x / this.CHUNK_SIZE);
-        const chunkZ = Math.floor(z / this.CHUNK_SIZE);
-        const localX = x - chunkX * this.CHUNK_SIZE;
-        const localZ = z - chunkZ * this.CHUNK_SIZE;
-        
-        const chunk = this.getChunk(chunkX, chunkZ);
-        const idx = localX + y * this.CHUNK_SIZE + localZ * this.CHUNK_SIZE * this.CHUNK_HEIGHT;
-        return chunk[idx] || BLOCK_TYPES.AIR;
-      }
-
-      setBlock(x, y, z, type) {
-        if (y < 0 || y >= this.CHUNK_HEIGHT) return;
-        
-        const chunkX = Math.floor(x / this.CHUNK_SIZE);
-        const chunkZ = Math.floor(z / this.CHUNK_SIZE);
-        const localX = x - chunkX * this.CHUNK_SIZE;
-        const localZ = z - chunkZ * this.CHUNK_SIZE;
-        
-        const chunk = this.getChunk(chunkX, chunkZ);
-        const idx = localX + y * this.CHUNK_SIZE + localZ * this.CHUNK_SIZE * this.CHUNK_HEIGHT;
-        chunk[idx] = type;
-      }
-    }
-
-    // ==================== GAME STATE ====================
-    class Game {
-      constructor() {
-        console.log('Game constructor called');
-        this.canvas = document.getElementById('gameCanvas');
-        this.ctx = this.canvas.getContext('2d');
-        console.log('Canvas:', this.canvas, 'Context:', this.ctx);
-        
-        this.world = new World();
-        console.log('World created');
-        
-        this.camera = {
-          x: 128,
-          y: 70,
-          z: 128,
-          pitch: 0,
-          yaw: 0,
-        };
-
-        this.player = {
-          x: 128,
-          y: 70,
-          z: 128,
-          vx: 0,
-          vy: 0,
-          vz: 0,
-          onGround: false,
-          crouching: false,
-        };
-
-        this.inventory = new Inventory();
-        this.keys = {};
-        this.mouse = { x: 0, y: 0, down: false, button: 0 };
-        
-        this.fps = 0;
-        this.frameCount = 0;
-        this.lastTime = Date.now();
-        
-        this.setupEventListeners();
-        this.resizeCanvas();
-        console.log('Game setup complete, starting game loop');
-        this.gameLoop();
-      }
-
-      resizeCanvas() {
-        this.canvas.width = this.canvas.offsetWidth;
-        this.canvas.height = this.canvas.offsetHeight;
-      }
-
-      setupEventListeners() {
-        window.addEventListener('keydown', (e) => {
-          this.keys[e.key.toLowerCase()] = true;
-          this.handleKeyDown(e);
-        });
-
-        window.addEventListener('keyup', (e) => {
-          this.keys[e.key.toLowerCase()] = false;
-        });
-
-        window.addEventListener('mousemove', (e) => {
-          this.mouse.x = e.clientX;
-          this.mouse.y = e.clientY;
-
-          this.camera.yaw += e.movementX * 0.005;
-          this.camera.pitch -= e.movementY * 0.005;
-          this.camera.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.camera.pitch));
-        });
-
-        window.addEventListener('mousedown', (e) => {
-          this.mouse.down = true;
-          this.mouse.button = e.button;
-          this.canvas.requestPointerLock();
-        });
-
-        window.addEventListener('mouseup', () => {
-          this.mouse.down = false;
-        });
-
-        window.addEventListener('resize', () => this.resizeCanvas());
-      }
-
-      handleKeyDown(e) {
-        const num = parseInt(e.key);
-        if (num >= 1 && num <= 8) {
-          this.inventory.select(num - 1);
-        }
-
-        if (e.key === 'c' || e.key === 'C') {
-          this.player.crouching = !this.player.crouching;
-        }
-      }
-
-      update(dt) {
-        const speed = 0.15;
-        const forward = (this.keys['w'] ? 1 : 0) - (this.keys['s'] ? 1 : 0);
-        const right = (this.keys['d'] ? 1 : 0) - (this.keys['a'] ? 1 : 0);
-
-        const moveX = Math.cos(this.camera.yaw) * forward + Math.sin(this.camera.yaw) * right;
-        const moveZ = Math.sin(this.camera.yaw) * forward - Math.cos(this.camera.yaw) * right;
-
-        this.player.x += moveX * speed;
-        this.player.z += moveZ * speed;
-
-        // Gravity
-        if (!this.player.onGround) {
-          this.player.vy -= 0.008;
-        }
-
-        if (this.keys[' '] && this.player.onGround) {
-          this.player.vy = 0.15;
-          this.player.onGround = false;
-        }
-
-        this.player.y += this.player.vy;
-
-        // Collision
-        const h = this.getGroundHeight(this.player.x, this.player.z);
-        const eyeHeight = this.player.crouching ? 1.2 : 1.62;
-        if (this.player.y - eyeHeight < h) {
-          this.player.y = h + eyeHeight;
-          this.player.vy = 0;
-          this.player.onGround = true;
-        } else {
-          this.player.onGround = false;
-        }
-
-        this.camera.x = this.player.x;
-        this.camera.y = this.player.y - (this.player.crouching ? 0.4 : 0);
-        this.camera.z = this.player.z;
-
-        this.handleBlockInteraction();
-      }
-
-      getGroundHeight(x, z) {
-        for (let y = 127; y >= 0; y--) {
-          if (this.world.getBlock(Math.floor(x), y, Math.floor(z)) !== BLOCK_TYPES.AIR) {
-            return y + 1;
-          }
-        }
-        return 0;
-      }
-
-      handleBlockInteraction() {
-        if (!this.mouse.down) return;
-
-        const hit = this.raycast(this.camera, 6);
-        if (!hit) return;
-
-        if (this.mouse.button === 0) {
-          // Mine
-          const block = this.world.getBlock(hit.x, hit.y, hit.z);
-          this.world.setBlock(hit.x, hit.y, hit.z, BLOCK_TYPES.AIR);
-          if (ITEM_DROPS[block]) {
-            const drop = ITEM_DROPS[block];
-            if (Math.random() < drop.chance) {
-              this.inventory.add(drop.item);
-            }
-          }
-        } else if (this.mouse.button === 2) {
-          // Build
-          const placed = this.placePlaceable(hit);
-          if (placed) this.mouse.down = false;
-        }
-      }
-
-      placePlaceable(hit) {
-        const item = this.inventory.getSelected();
-        if (!item) return false;
-
-        const buildX = hit.x + hit.normal[0];
-        const buildY = hit.y + hit.normal[1];
-        const buildZ = hit.z + hit.normal[2];
-
-        const dist = Math.hypot(
-          buildX - this.camera.x,
-          buildY - this.camera.y,
-          buildZ - this.camera.z
-        );
-
-        if (dist < 1.5) return false;
-
-        this.world.setBlock(buildX, buildY, buildZ, item);
-        this.inventory.remove(1);
-        return true;
-      }
-
-      raycast(camera, distance) {
-        const dx = Math.cos(camera.pitch) * Math.sin(camera.yaw);
-        const dy = Math.sin(camera.pitch);
-        const dz = Math.cos(camera.pitch) * Math.cos(camera.yaw);
-
-        for (let d = 0.1; d < distance; d += 0.1) {
-          const x = Math.floor(camera.x + dx * d);
-          const y = Math.floor(camera.y + dy * d);
-          const z = Math.floor(camera.z + dz * d);
-
-          if (this.world.getBlock(x, y, z) !== BLOCK_TYPES.AIR) {
-            return {
-              x, y, z,
-              normal: [
-                Math.round(dx),
-                Math.round(dy),
-                Math.round(dz),
-              ],
-            };
-          }
-        }
-        return null;
-      }
-
-      render() {
-        this.ctx.fillStyle = '#87CEEB';
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-        const perspective = this.canvas.width / (2 * Math.tan(Math.PI / 4));
-        const centerX = this.canvas.width / 2;
-        const centerY = this.canvas.height / 2;
-
-        const chunkArrays = this.getVisibleChunks();
-        const voxels = [];
-
-        for (const chunkData of chunkArrays) {
-          voxels.push(...chunkData);
-        }
-
-        if (this.frameCount % 60 === 0) {
-          console.log('Frame:', this.frameCount, 'Chunks:', chunkArrays.length, 'Voxels:', voxels.length);
-        }
-
-        voxels.sort((a, b) => b.dist - a.dist);
-
-        for (const voxel of voxels) {
-          this.drawVoxel(voxel, perspective, centerX, centerY);
-        }
-
-        this.updateHUD();
-      }
-
-      getVisibleChunks() {
-        const result = [];
-        
-        const chunkX = Math.floor(this.camera.x / this.world.CHUNK_SIZE);
-        const chunkZ = Math.floor(this.camera.z / this.world.CHUNK_SIZE);
-
-        for (let cx = chunkX - 1; cx <= chunkX + 1; cx++) {
-          for (let cz = chunkZ - 1; cz <= chunkZ + 1; cz++) {
-            const chunk = this.world.getChunk(cx, cz);
-            const voxels = [];
-
-            for (let x = 0; x < this.world.CHUNK_SIZE; x++) {
-              for (let y = 40; y < 90; y++) {
-                for (let z = 0; z < this.world.CHUNK_SIZE; z++) {
-                  const idx = x + y * this.world.CHUNK_SIZE + z * this.world.CHUNK_SIZE * this.world.CHUNK_HEIGHT;
-                  const block = chunk[idx];
-
-                  if (block !== BLOCK_TYPES.AIR) {
-                    const wx = cx * this.world.CHUNK_SIZE + x;
-                    const wy = y;
-                    const wz = cz * this.world.CHUNK_SIZE + z;
-
-                    const dist = Math.hypot(wx - this.camera.x, wy - this.camera.y, wz - this.camera.z);
-                    if (dist < 50) {
-                      voxels.push({
-                        x: wx, y: wy, z: wz,
-                        type: block,
-                        dist,
-                      });
-                    }
-                  }
-                }
-              }
-            }
-
-            if (voxels.length > 0) {
-              result.push(voxels);
-            }
-          }
-        }
-
-        return result;
-      }
-
-      drawVoxel(voxel, perspective, centerX, centerY) {
-        const dx = voxel.x - this.camera.x;
-        const dy = voxel.y - this.camera.y;
-        const dz = voxel.z - this.camera.z;
-
-        // Rotate to camera space
-        const cosY = Math.cos(this.camera.yaw);
-        const sinY = Math.sin(this.camera.yaw);
-        const cosP = Math.cos(this.camera.pitch);
-        const sinP = Math.sin(this.camera.pitch);
-
-        let rx = dx * cosY - dz * sinY;
-        let rz = dx * sinY + dz * cosY;
-        let ry = dy;
-
-        const ty = ry * cosP - rz * sinP;
-        rz = ry * sinP + rz * cosP;
-
-        if (rz <= 0.1) return;
-
-        const screenX = centerX + (rx / rz) * perspective;
-        const screenY = centerY - (ty / rz) * perspective;
-
-        const size = Math.max(2, perspective / rz * 0.8);
-        let color = BLOCK_COLORS[voxel.type] || 0x808080;
-        
-        if (typeof color === 'object') {
-          color = color.top;
-        }
-
-        this.ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
-        this.ctx.fillRect(screenX - size / 2, screenY - size / 2, size, size);
-        this.ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-        this.ctx.lineWidth = 0.5;
-        this.ctx.strokeRect(screenX - size / 2, screenY - size / 2, size, size);
-      }
-
-      updateHUD() {
-        const now = Date.now();
-        const elapsed = now - this.lastTime;
-        if (elapsed > 100) {
-          this.fps = Math.floor(this.frameCount / (elapsed / 1000));
-          this.frameCount = 0;
-          this.lastTime = now;
-        }
-
-        document.getElementById('fps').textContent = this.fps;
-        document.getElementById('health').textContent = '20';
-        document.getElementById('hunger').textContent = '20';
-
-        const hit = this.raycast(this.camera, 5);
-        const blockInfo = document.getElementById('blockInfo');
-        if (hit) {
-          const block = this.world.getBlock(hit.x, hit.y, hit.z);
-          const name = ITEM_NAMES[block] || 'Block';
-          blockInfo.textContent = `Looking at: ${name}`;
-        } else {
-          blockInfo.textContent = '';
-        }
-
-        this.inventory.render();
-      }
-
-      gameLoop() {
-        this.update(0.016);
-        this.render();
-        this.frameCount++;
-        requestAnimationFrame(() => this.gameLoop());
-      }
-    }
-
-    // ==================== INVENTORY ====================
-    class Inventory {
-      constructor() {
-        this.slots = new Array(8).fill(null);
-        this.selected = 0;
-        this.slots[0] = { type: BLOCK_TYPES.PLANKS, count: 32 };
-      }
-
-      select(index) {
-        this.selected = Math.max(0, Math.min(7, index));
-      }
-
-      add(itemType) {
-        for (let i = 0; i < this.slots.length; i++) {
-          if (!this.slots[i]) {
-            this.slots[i] = { type: itemType, count: 1 };
-            return;
-          } else if (this.slots[i].type === itemType && this.slots[i].count < 64) {
-            this.slots[i].count++;
-            return;
-          }
-        }
-      }
-
-      remove(count) {
-        if (this.slots[this.selected]) {
-          this.slots[this.selected].count -= count;
-          if (this.slots[this.selected].count <= 0) {
-            this.slots[this.selected] = null;
-          }
-        }
-      }
-
-      getSelected() {
-        const slot = this.slots[this.selected];
-        return slot ? slot.type : null;
-      }
-
-      render() {
-        const container = document.getElementById('inventory');
-        container.innerHTML = '';
-
-        for (let i = 0; i < 8; i++) {
-          const slot = document.createElement('div');
-          slot.className = 'inventory-slot' + (i === this.selected ? ' selected' : '');
-          
-          if (this.slots[i]) {
-            const name = ITEM_NAMES[this.slots[i].type] || 'Item';
-            slot.innerHTML = `<div>${this.slots[i].count}</div>`;
-            slot.title = `${name} x${this.slots[i].count}`;
-          }
-
-          slot.addEventListener('click', () => this.select(i));
-          container.appendChild(slot);
-        }
-      }
-    }
-
-    // ==================== START GAME ====================
-    console.log('Script loaded');
-    window.addEventListener('DOMContentLoaded', () => {
-      console.log('DOM Content Loaded');
-      try {
-        const game = new Game();
-        console.log('Game initialized');
-      } catch (e) {
-        console.error('Game initialization error:', e);
-      }
-    });
-    
-    // Fallback if DOMContentLoaded fires before script
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => {
-        console.log('Late DOM Content Loaded');
-      });
-    } else {
-      console.log('Document already loaded, initializing...');
-      try {
-        const game = new Game();
-        console.log('Game initialized (late)');
-      } catch (e) {
-        console.error('Game initialization error (late):', e);
-      }
-    }
-  </script>
-</body>
-</html>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D Minecraft</title>
-  <style>
-    body {
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      font-family: Arial, sans-serif;
-    }
-
-    #gameCanvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      display: block;
-      background: #000;
-    }
-
-    #startScreen {
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(180deg, rgba(5, 5, 5, 0.95), rgba(20, 20, 20, 0.95));
-      z-index: 1000;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-    }
-
-    .start-panel {
-      width: min(480px, 100%);
-      background: rgba(30, 30, 30, 0.98);
-      border: 2px solid rgba(255, 255, 255, 0.12);
-      border-radius: 14px;
-      padding: 24px;
-      box-shadow: 0 0 40px rgba(0, 0, 0, 0.7);
-      color: white;
-      text-align: center;
-    }
-
-    .start-title {
-      font-size: 48px;
-      letter-spacing: 0.2em;
-      margin-bottom: 8px;
-      text-transform: uppercase;
-    }
-
-    .start-subtitle {
-      font-size: 18px;
-      color: #ddd;
-      margin-bottom: 20px;
-    }
-
-    .start-form {
-      display: grid;
-      gap: 12px;
-      margin-bottom: 18px;
-    }
-
-    .field-label {
-      display: block;
-      text-align: left;
-      font-size: 12px;
-      color: #ccc;
-      margin-bottom: 4px;
-    }
-
-    .start-form input,
-    .start-form select {
-      width: 100%;
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      background: rgba(255, 255, 255, 0.08);
-      color: #fff;
-      outline: none;
-      font-size: 14px;
-    }
-
-    .start-form button {
-      width: 100%;
-      padding: 14px 16px;
-      border: none;
-      border-radius: 8px;
-      background: #4caf50;
-      color: white;
-      font-size: 16px;
-      cursor: pointer;
-      transition: background 0.2s ease;
-    }
-
-    .start-form button:hover {
-      background: #57b15d;
-    }
-
-    .start-notes {
-      font-size: 13px;
-      color: #bbb;
-      line-height: 1.5;
-    }
-
-    #ui {
-      position: absolute;
-      top: 16px;
-      left: 16px;
-      color: white;
-      background: rgba(0, 0, 0, 0.5);
-      padding: 10px 14px;
-      border-radius: 8px;
-      font-size: 14px;
-      display: none;
-      z-index: 20;
-      min-width: 220px;
-    }
-
-    .hud-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-
-    #crosshair {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      width: 24px;
-      height: 24px;
-      transform: translate(-50%, -50%);
-      pointer-events: none;
       z-index: 10;
-      opacity: 0;
-      transition: opacity 0.2s ease;
+      font-size: 13px;
+      line-height: 1.6;
+      text-shadow: 0 0 8px rgba(0,0,0,0.8);
     }
-
-    .game-active #crosshair {
-      opacity: 1;
-    }
-
-    #crosshair::before,
-    #crosshair::after {
-      content: '';
+    #hotbar {
       position: absolute;
-      background: white;
-    }
-
-    #crosshair::before {
-      width: 2px;
-      height: 20px;
-      left: 9px;
-    }
-
-    #crosshair::after {
-      width: 20px;
-      height: 2px;
-      top: 9px;
-    }
-
-    .game-active {
-      cursor: none;
-    }
-
-    #inventory {
-      position: absolute;
-      bottom: 10px;
+      bottom: 20px;
       left: 50%;
       transform: translateX(-50%);
       display: flex;
-      gap: 5px;
-      background: rgba(0, 0, 0, 0.5);
-      padding: 10px;
-      border-radius: 5px;
+      gap: 6px;
+      z-index: 10;
     }
-
-    #fullInventory {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: rgba(0, 0, 0, 0.9);
-      padding: 20px;
-      border-radius: 10px;
-      display: none;
-      z-index: 2000;
-      max-width: 600px;
-    }
-
-    #fullInventory h3 {
-      color: white;
-      margin-top: 0;
-      text-align: center;
-    }
-
-    .inventory-grid {
-      display: grid;
-      grid-template-columns: repeat(9, 1fr);
-      gap: 2px;
-      margin-bottom: 20px;
-    }
-
-    .inventory-slot {
-      width: 40px;
-      height: 40px;
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(255, 255, 255, 0.3);
+    .slot {
+      width: 32px;
+      height: 32px;
+      border: 2px solid rgba(255,255,255,0.4);
+      background: rgba(0,0,0,0.5);
       display: flex;
       align-items: center;
       justify-content: center;
-      color: white;
       font-size: 12px;
-      cursor: pointer;
-      position: relative;
+      color: #fff;
     }
-
-    .inventory-slot:hover {
-      background: rgba(255, 255, 255, 0.2);
-    }
-
-    .inventory-slot.selected {
-      border-color: yellow;
-      box-shadow: 0 0 5px yellow;
-    }
-
-    .crafting-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 2px;
-      margin-bottom: 10px;
-    }
-
-    .crafting-result {
-      width: 40px;
-      height: 40px;
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      font-size: 12px;
-      margin: 0 auto;
-    }
-
-    #health-bar {
+    .slot.active { border-color: #fff; }
+    .crosshair {
       position: absolute;
-      top: 10px;
-      right: 10px;
-      display: none;
-      gap: 2px;
-      z-index: 20;
-    }
-
-    .heart {
-      width: 20px;
-      height: 20px;
-      background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="red"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>') no-repeat center;
-      background-size: contain;
-    }
-
-    .heart.empty {
-      opacity: 0.3;
-    }
-
-    .block-item {
-      width: 40px;
-      height: 40px;
-      border: 2px solid #666;
-      cursor: pointer;
-      border-radius: 5px;
-    }
-
-    .block-item.selected {
-      border-color: white;
-      box-shadow: 0 0 10px white;
-    }
-
-    #instructions {
-      position: absolute;
-      top: 50%;
       left: 50%;
+      top: 50%;
+      width: 16px;
+      height: 16px;
       transform: translate(-50%, -50%);
-      color: white;
-      background: rgba(0, 0, 0, 0.8);
-      padding: 20px;
-      border-radius: 10px;
-      text-align: center;
-      z-index: 1000;
+      pointer-events: none;
     }
-
-    #instructions button {
-      margin-top: 10px;
-      padding: 10px 20px;
-      background: #4CAF50;
-      color: white;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
+    .crosshair::before, .crosshair::after {
+      content: '';
+      position: absolute;
+      background: #fff;
     }
+    .crosshair::before { width: 12px; height: 1px; left: 2px; top: 7px; }
+    .crosshair::after { width: 1px; height: 12px; left: 7px; top: 2px; }
   </style>
 </head>
 <body>
-  <canvas id="gameCanvas"></canvas>
-
-  <div id="startScreen">
-    <div class="start-panel">
-      <div class="start-title">Minecraft</div>
-      <div class="start-subtitle">Singleplayer</div>
-      <div class="start-form">
-        <label class="field-label" for="worldName">World Name</label>
-        <input id="worldName" type="text" value="New World" />
-
-        <label class="field-label" for="worldSeed">Seed</label>
-        <input id="worldSeed" type="text" placeholder="Random seed" />
-
-        <label class="field-label" for="gameMode">Game Mode</label>
-        <select id="gameMode">
-          <option value="survival">Survival</option>
-          <option value="creative">Creative</option>
-        </select>
-
-        <button id="startButton">Create New World</button>
-      </div>
-      <div class="start-notes">
-        <p>WASD to move, mouse to look around.</p>
-        <p>Left click to mine, right click to place, E to open inventory.</p>
-      </div>
-    </div>
+  <canvas id="canvas"></canvas>
+  <div id="overlay">
+    <div>WASD Move | Space Jump | C Crouch</div>
+    <div>Left click: remove | Right click: place</div>
+    <div>1-4: select block</div>
+    <div>Blocks have thin black lines between them</div>
   </div>
-
-  <div id="ui">
-    <div class="hud-row">
-      <div>Coordinates: <span id="position">0, 0, 0</span></div>
-      <div>Selected: <span id="selectedBlock">None</span></div>
-    </div>
-  </div>
-
-  <div id="crosshair"></div>
-
-  <div id="fullInventory">
-    <h3>Inventory</h3>
-    <div class="inventory-grid" id="inventoryGrid">
-      <!-- 36 inventory slots will be created by JavaScript -->
-    </div>
-    <h4>Crafting</h4>
-    <div class="crafting-grid" id="craftingGrid">
-      <!-- 9 crafting slots -->
-    </div>
-    <div class="crafting-result" id="craftingResult"></div>
-  </div>
-
-  <div id="health-bar">
-    <!-- 10 hearts will be created by JavaScript -->
-  </div>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-
+  <div id="hotbar"></div>
+  <div class="crosshair"></div>
   <script>
-    const canvas = document.getElementById('gameCanvas');
-    const ui = document.getElementById('ui');
-    const positionEl = document.getElementById('position');
-    const selectedBlockEl = document.getElementById('selectedBlock');
-    const startScreen = document.getElementById('startScreen');
-    const startButton = document.getElementById('startButton');
-    const fullInventory = document.getElementById('fullInventory');
-    const inventoryGrid = document.getElementById('inventoryGrid');
-    const craftingGrid = document.getElementById('craftingGrid');
-    const craftingResult = document.getElementById('craftingResult');
-    const healthBar = document.getElementById('healthBar');
-    const worldNameInput = document.getElementById('worldName');
-    const worldSeedInput = document.getElementById('worldSeed');
-    const gameModeSelect = document.getElementById('gameMode');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const hotbar = document.getElementById('hotbar');
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
 
-    let scene, camera, renderer, controls;
-    let world = {};
-    let selectedSlot = 0;
-    let isLocked = false;
-    let inventoryOpen = false;
-    let velocity = new THREE.Vector3();
-    let direction = new THREE.Vector3();
-    let prevTime = performance.now();
-    let prevMouseX = window.innerWidth / 2;
-    let prevMouseY = window.innerHeight / 2;
-    let mobs = [];
-    let dayTime = 0;
-    let yaw = 0;
-    let pitch = 0;
-    let moveForward = false;
-    let moveBackward = false;
-    let moveLeft = false;
-    let moveRight = false;
-    let canJump = true;
-    let health = 20;
-    let hunger = 20;
-    let directionalLight = null;
+    const BLOCKS = [
+      { id: 1, name: 'Grass', color: '#5BA93C' },
+      { id: 2, name: 'Dirt', color: '#8B6F47' },
+      { id: 3, name: 'Stone', color: '#888888' },
+      { id: 4, name: 'Wood', color: '#8B5D2B' }
+    ];
 
-    // Player stats
-    let player = {
-      health: 20,
-      hunger: 20,
-      experience: 0,
-      level: 1,
-      inventory: new Array(36).fill(null),
-      craftingGrid: new Array(9).fill(null),
-      selectedSlot: 0
+    const inventory = [
+      { block: BLOCKS[0], count: 32 },
+      { block: BLOCKS[1], count: 16 },
+      { block: BLOCKS[2], count: 8 },
+      { block: BLOCKS[3], count: 16 }
+    ];
+    let selectedIndex = 0;
+    const world = new Map();
+    const WORLD_SIZE = 16;
+
+    for (let x = -WORLD_SIZE; x <= WORLD_SIZE; x++) {
+      for (let z = -WORLD_SIZE; z <= WORLD_SIZE; z++) {
+        world.set(`${x},0,${z}`, BLOCKS[0]);
+      }
+    }
+
+    const camera = {
+      x: 0,
+      y: 8,
+      z: 0,
+      pitch: -0.35,
+      yaw: 0,
+      speed: 0.18,
+      vy: 0,
+      crouch: false
     };
 
-    const CHUNK_SIZE = 16;
-    const WORLD_HEIGHT = 64;
-    const GRAVITY = -30;
-    const JUMP_FORCE = 15;
-    const MOVE_SPEED = 25;
-    const loadedChunks = new Set();
+    const keys = {};
+    let mouseDown = false;
+    let mouseButton = 0;
 
-    // Tool materials and their properties
-    const toolMaterials = {
-      wooden: { durability: 60, multiplier: 2, color: 0x8B4513 },
-      stone: { durability: 132, multiplier: 4, color: 0x696969 },
-      iron: { durability: 251, multiplier: 6, color: 0xD3D3D3 },
-      diamond: { durability: 1562, multiplier: 8, color: 0xB9F2FF }
-    };
-
-    // Block hardness and required tools
-    const blockProperties = {
-      grass: { hardness: 0.6, tool: 'shovel', drops: 'dirt' },
-      dirt: { hardness: 0.5, tool: 'shovel', drops: 'dirt' },
-      stone: { hardness: 1.5, tool: 'pickaxe', drops: 'cobblestone' },
-      cobblestone: { hardness: 2.0, tool: 'pickaxe', drops: 'cobblestone' },
-      wood: { hardness: 2.0, tool: 'axe', drops: 'wood' },
-      sand: { hardness: 0.5, tool: 'shovel', drops: 'sand' },
-      iron_ore: { hardness: 3.0, tool: 'pickaxe', drops: 'iron_ore', minTool: 'stone' },
-      coal_ore: { hardness: 3.0, tool: 'pickaxe', drops: 'coal', minTool: 'wooden' },
-      gold_ore: { hardness: 3.0, tool: 'pickaxe', drops: 'gold_ore', minTool: 'iron' },
-      diamond_ore: { hardness: 3.0, tool: 'pickaxe', drops: 'diamond', minTool: 'iron' }
-    };
-
-    // Items and their properties
-    const items = {
-      // Blocks
-      grass: { type: 'block', stackSize: 64, texture: '🟢' },
-      dirt: { type: 'block', stackSize: 64, texture: '🟫' },
-      stone: { type: 'block', stackSize: 64, texture: '⬜' },
-      cobblestone: { type: 'block', stackSize: 64, texture: '🔳' },
-      wood: { type: 'block', stackSize: 64, texture: '🪵' },
-      sand: { type: 'block', stackSize: 64, texture: '🟨' },
-
-      // Ores/Drops
-      iron_ore: { type: 'item', stackSize: 64, texture: '⚙️' },
-      coal: { type: 'item', stackSize: 64, texture: '⚫' },
-      gold_ore: { type: 'item', stackSize: 64, texture: '⭐' },
-      diamond: { type: 'item', stackSize: 64, texture: '💎' },
-      cobblestone_drop: { type: 'item', stackSize: 64, texture: '🔳' },
-      stick: { type: 'item', stackSize: 64, texture: '🪢' },
-
-      // Tools - easier with emoji names
-      wooden_pickaxe: { type: 'tool', stackSize: 1, material: 'wooden', toolType: 'pickaxe', texture: '🪓' },
-      wooden_axe: { type: 'tool', stackSize: 1, material: 'wooden', toolType: 'axe', texture: '🪓' },
-      wooden_shovel: { type: 'tool', stackSize: 1, material: 'wooden', toolType: 'shovel', texture: '🪓' },
-      stone_pickaxe: { type: 'tool', stackSize: 1, material: 'stone', toolType: 'pickaxe', texture: '⛏️' },
-      stone_axe: { type: 'tool', stackSize: 1, material: 'stone', toolType: 'axe', texture: '⛏️' },
-      stone_shovel: { type: 'tool', stackSize: 1, material: 'stone', toolType: 'shovel', texture: '⛏️' },
-      iron_pickaxe: { type: 'tool', stackSize: 1, material: 'iron', toolType: 'pickaxe', texture: '⚙️' },
-      iron_axe: { type: 'tool', stackSize: 1, material: 'iron', toolType: 'axe', texture: '⚙️' },
-      iron_shovel: { type: 'tool', stackSize: 1, material: 'iron', toolType: 'shovel', texture: '⚙️' },
-      diamond_pickaxe: { type: 'tool', stackSize: 1, material: 'diamond', toolType: 'pickaxe', texture: '💎' },
-      diamond_axe: { type: 'tool', stackSize: 1, material: 'diamond', toolType: 'axe', texture: '💎' },
-      diamond_shovel: { type: 'tool', stackSize: 1, material: 'diamond', toolType: 'shovel', texture: '💎' }
-    };
-
-    // Crafting recipes
-    const recipes = {
-      wooden_pickaxe: [
-        ['wood', 'wood', 'wood'],
-        [null, 'stick', null],
-        [null, 'stick', null]
-      ],
-      wooden_axe: [
-        ['wood', 'wood', null],
-        ['wood', 'stick', null],
-        [null, 'stick', null]
-      ],
-      wooden_shovel: [
-        [null, 'wood', null],
-        [null, 'stick', null],
-        [null, 'stick', null]
-      ],
-      stone_pickaxe: [
-        ['cobblestone', 'cobblestone', 'cobblestone'],
-        [null, 'stick', null],
-        [null, 'stick', null]
-      ],
-      stone_axe: [
-        ['cobblestone', 'cobblestone', null],
-        ['cobblestone', 'stick', null],
-        [null, 'stick', null]
-      ],
-      stone_shovel: [
-        [null, 'cobblestone', null],
-        [null, 'stick', null],
-        [null, 'stick', null]
-      ]
-    };
-
-    // Create simple textures (we'll use colors for now, but this could be extended with actual textures)
-    const blockMaterials = {};
-    const itemTextures = {};
-
-    function createMaterials() {
-      // Minecraft-like block materials with canvas textures
-      const blockColors = {
-        grass: 0x5BA93C,
-        dirt: 0x8B6F47,
-        stone: 0x7F7F7F,
-        cobblestone: 0x696969,
-        wood: 0x8B5D2B,
-        sand: 0xD3BC8D,
-        iron_ore: 0x8C7853,
-        coal_ore: 0x1a1a1a,
-        gold_ore: 0xCDAE66,
-        diamond_ore: 0x5CCFE7
+    function project(point) {
+      const dx = point.x - camera.x;
+      const dy = point.y - camera.y;
+      const dz = point.z - camera.z;
+      const cosY = Math.cos(camera.yaw);
+      const sinY = Math.sin(camera.yaw);
+      const cosP = Math.cos(camera.pitch);
+      const sinP = Math.sin(camera.pitch);
+      const rx = dx * cosY - dz * sinY;
+      const rz = dx * sinY + dz * cosY;
+      const ry = dy;
+      const ty = ry * cosP - rz * sinP;
+      const tz = ry * sinP + rz * cosP;
+      if (tz <= 0.1) return null;
+      const f = 600 / tz;
+      return {
+        x: canvas.width / 2 + rx * f,
+        y: canvas.height / 2 - ty * f,
+        scale: f
       };
+    }
 
-      Object.keys(blockColors).forEach(block => {
-        // Create canvas-based texture for Minecraft-like look
-        const canvas = document.createElement('canvas');
-        canvas.width = 64;
-        canvas.height = 64;
-        const ctx = canvas.getContext('2d');
-        
-        // Base color
-        ctx.fillStyle = '#' + blockColors[block].toString(16).padStart(6, '0');
-        ctx.fillRect(0, 0, 64, 64);
-        
-        // Add noise/texture pattern
-        ctx.fillStyle = 'rgba(0,0,0,0.1)';
-        for (let i = 0; i < 100; i++) {
-          const x = Math.random() * 64;
-          const y = Math.random() * 64;
-          const size = Math.random() * 3;
-          ctx.fillRect(x, y, size, size);
-        }
-        
-        // Add highlight/shadow for depth
-        ctx.fillStyle = 'rgba(255,255,255,0.05)';
-        ctx.fillRect(0, 0, 64, 2);
-        ctx.fillRect(0, 0, 2, 64);
-        ctx.fillStyle = 'rgba(0,0,0,0.1)';
-        ctx.fillRect(62, 0, 2, 64);
-        ctx.fillRect(0, 62, 64, 2);
-        
-        const texture = new THREE.CanvasTexture(canvas);
-        texture.magFilter = THREE.NearestFilter;
-        texture.minFilter = THREE.NearestFilter;
-        
-        blockMaterials[block] = new THREE.MeshStandardMaterial({
-          map: texture,
-          roughness: 0.7,
-          metalness: block.includes('ore') ? 0.3 : 0.0
-        });
+    function blockCorners(x, y, z) {
+      return [
+        { x: x, y: y, z: z },
+        { x: x + 1, y: y, z: z },
+        { x: x + 1, y: y + 1, z: z },
+        { x: x, y: y + 1, z: z },
+        { x: x, y: y, z: z + 1 },
+        { x: x + 1, y: y, z: z + 1 },
+        { x: x + 1, y: y + 1, z: z + 1 },
+        { x: x, y: y + 1, z: z + 1 }
+      ];
+    }
+
+    const faces = [
+      [0,1,2,3],
+      [4,5,6,7],
+      [0,1,5,4],
+      [3,2,6,7],
+      [0,3,7,4],
+      [1,2,6,5]
+    ];
+
+    function drawBlock(x, y, z, block) {
+      const corners = blockCorners(x, y, z).map(project);
+      if (corners.some(c => c === null)) return;
+      const faceOrder = [1, 0, 2, 3, 4, 5];
+      faceOrder.forEach(fi => {
+        const face = faces[fi].map(i => corners[i]);
+        const avgZ = face.reduce((sum, p) => sum + p.y, 0);
+        const visible = face.every(p => p.x !== null);
+        if (!visible) return;
+        ctx.beginPath();
+        ctx.moveTo(face[0].x, face[0].y);
+        face.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        const shade = fi === 1 ? 0.85 : (fi === 2 || fi === 3 ? 0.9 : 1);
+        ctx.fillStyle = shadeColor(block.color, shade);
+        ctx.fill();
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+        ctx.stroke();
       });
+    }
 
-      // Item textures (simplified)
-      Object.keys(items).forEach(item => {
-        itemTextures[item] = items[item].texture || item;
+    function shadeColor(color, factor) {
+      const value = parseInt(color.slice(1), 16);
+      const r = Math.round(((value >> 16) & 255) * factor);
+      const g = Math.round(((value >> 8) & 255) * factor);
+      const b = Math.round((value & 255) * factor);
+      return `rgb(${r},${g},${b})`;
+    }
+
+    function drawWorld() {
+      ctx.fillStyle = '#87CEEB';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const blocks = [];
+      world.forEach((block, key) => {
+        const [x,y,z] = key.split(',').map(Number);
+        const center = project({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
+        if (!center) return;
+        blocks.push({ x, y, z, block, depth: center.y });
       });
+      blocks.sort((a,b) => b.depth - a.depth);
+      blocks.forEach(b => drawBlock(b.x, b.y, b.z, b.block));
     }
 
-    function init() {
-      console.log('🎮 Initializing game...');
-      createMaterials();
-
-      // Scene with Minecraft sky color
-      scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x87CEEB);
-      scene.fog = new THREE.Fog(0x87CEEB, 150, 250);
-
-      // Camera
-      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-      camera.position.set(0, 20, 0);
-
-      // Renderer
-      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.shadowMap.enabled = true;
-      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-      renderer.outputEncoding = THREE.sRGBEncoding;
-
-      // Better Lighting Setup
-      const ambientLight = new THREE.AmbientLight(0x9db3c8, 0.6);
-      scene.add(ambientLight);
-
-      directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
-      directionalLight.position.set(60, 80, 40);
-      directionalLight.target.position.set(0, 0, 0);
-      directionalLight.castShadow = true;
-      directionalLight.shadow.mapSize.width = 4096;
-      directionalLight.shadow.mapSize.height = 4096;
-      directionalLight.shadow.camera.near = 0.5;
-      directionalLight.shadow.camera.far = 300;
-      directionalLight.shadow.camera.left = -150;
-      directionalLight.shadow.camera.right = 150;
-      directionalLight.shadow.camera.top = 150;
-      directionalLight.shadow.camera.bottom = -150;
-      directionalLight.shadow.bias = -0.0005;
-      directionalLight.shadow.normalBias = 0.05;
-      scene.add(directionalLight);
-
-      // Add fill light for better visibility
-      const fillLight = new THREE.DirectionalLight(0x87ceeb, 0.4);
-      fillLight.position.set(-60, 40, -40);
-      scene.add(fillLight);
-
-      // Initialize UI
-      createInventory();
-      createHealthBar();
-      updateUI();
-
-      // Event listeners
-      console.log('📌 Starting game automatically...');
-      document.addEventListener('keydown', onKeyDown);
-      document.addEventListener('keyup', onKeyUp);
-      document.addEventListener('click', onMouseClick);
-      document.addEventListener('contextmenu', onRightClick);
-      document.addEventListener('wheel', onWheel);
-      document.addEventListener('mousemove', onMouseMove);
-      window.addEventListener('resize', onWindowResize);
-
-      // Skip start screen and go directly to game
-      startGameWorld();
-      
-      console.log('✅ Game initialized! Enjoy!');
-      animate();
+    function getGroundHeight(x,z) {
+      for (let y = 10; y >= 0; y--) {
+        if (world.has(`${x},${y},${z}`)) return y;
+      }
+      return -1;
     }
 
-    function startGameWorld() {
-      try {
-        console.log('🌍 Building world...');
-        // Clear existing world
-        Object.values(world).forEach(block => {
-          if (block && block.mesh) {
-            scene.remove(block.mesh);
-          }
-        });
-        world = {};
-        loadedChunks.clear();
-
-        // Generate initial world (larger render distance)
-        for (let x = -2; x <= 2; x++) {
-          for (let z = -2; z <= 2; z++) {
-            generateChunk(x, z);
-          }
-        }
-
-        // Add mobs
-        mobs.forEach(mob => scene.remove(mob));
-        mobs = [];
-        spawnMobs();
-
-        // Give player starting items
-        player.inventory = new Array(36).fill(null);
-        giveStartingItems();
-        player.selectedSlot = 0;
-        updateInventoryDisplay();
-
-        // Spawn player above terrain
-        camera.position.set(0, 70, 0);
-        velocity.set(0, 0, 0);
-        
-        // Activate game
-        document.body.classList.add('game-active');
-        isLocked = true;
-        ui.style.display = 'block';
-        healthBar.style.display = 'flex';
-        prevTime = performance.now();
-        
-        console.log('✅ World ready! Start building!');
-      } catch (err) {
-        console.error('❌ Error in startGameWorld:', err);
-        alert('Error generating world: ' + err.message);
+    function update() {
+      const forward = (keys['w'] ? 1 : 0) - (keys['s'] ? 1 : 0);
+      const right = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
+      const dx = Math.sin(camera.yaw) * forward + Math.cos(camera.yaw) * right;
+      const dz = Math.cos(camera.yaw) * forward - Math.sin(camera.yaw) * right;
+      camera.x += dx * camera.speed;
+      camera.z += dz * camera.speed;
+      const ground = getGroundHeight(Math.floor(camera.x), Math.floor(camera.z));
+      if (!camera.crouch) camera.vy -= 0.01;
+      if (keys[' '] && Math.abs(camera.y - (ground + 2.2)) < 0.15) camera.vy = 0.22;
+      camera.y += camera.vy;
+      if (camera.y < ground + 2.2) {
+        camera.y = ground + 2.2;
+        camera.vy = 0;
       }
     }
 
-    function createInventory() {
-      // Create 36 inventory slots
-      for (let i = 0; i < 36; i++) {
-        const slot = document.createElement('div');
-        slot.className = 'inventory-slot';
-        slot.dataset.slot = i;
-        slot.addEventListener('click', () => selectInventorySlot(i));
-        inventoryGrid.appendChild(slot);
-      }
-
-      // Create 9 crafting slots
-      for (let i = 0; i < 9; i++) {
-        const slot = document.createElement('div');
-        slot.className = 'inventory-slot';
-        slot.dataset.craftingSlot = i;
-        slot.addEventListener('click', () => selectCraftingSlot(i));
-        craftingGrid.appendChild(slot);
-      }
-    }
-
-    function createHealthBar() {
-      for (let i = 0; i < 10; i++) {
-        const heart = document.createElement('div');
-        heart.className = 'heart';
-        healthBar.appendChild(heart);
-      }
-      updateHealthBar();
-    }
-
-    function updateHealthBar() {
-      const hearts = healthBar.children;
-      for (let i = 0; i < 10; i++) {
-        hearts[i].classList.toggle('empty', (i * 2) >= player.health);
-      }
-    }
-
-    function giveStartingItems() {
-      // Give player wooden tools to start the progression
-      addItemToInventory('wooden_pickaxe', 1);
-      addItemToInventory('wooden_axe', 1);
-      addItemToInventory('wooden_shovel', 1);
-      addItemToInventory('wood', 32);
-      addItemToInventory('dirt', 32);
-      addItemToInventory('stick', 16);
-    }
-
-    function addItemToInventory(itemId, count) {
-      const item = items[itemId];
-      if (!item) return;
-
-      // Try to add to existing stacks first
-      for (let i = 0; i < 36; i++) {
-        if (player.inventory[i] && player.inventory[i].id === itemId && player.inventory[i].count < item.stackSize) {
-          const space = item.stackSize - player.inventory[i].count;
-          const addCount = Math.min(count, space);
-          player.inventory[i].count += addCount;
-          count -= addCount;
-          if (count <= 0) break;
-        }
-      }
-
-      // Add to empty slots
-      for (let i = 0; i < 36; i++) {
-        if (!player.inventory[i] && count > 0) {
-          const addCount = Math.min(count, item.stackSize);
-          player.inventory[i] = { id: itemId, count: addCount };
-          count -= addCount;
-        }
-      }
-
-      updateInventoryDisplay();
-    }
-
-    function updateInventoryDisplay() {
-      const slots = inventoryGrid.children;
-      for (let i = 0; i < 36; i++) {
-        const slot = slots[i];
-        const item = player.inventory[i];
-        if (item) {
-          const itemData = items[item.id];
-          const texture = itemData ? (itemData.texture || item.id) : item.id;
-          slot.textContent = `${texture}\n${item.count}`;
-          slot.style.background = i === player.selectedSlot ? `rgba(200, 200, 50, 0.7)` : `rgba(100, 100, 100, 0.5)`;
-          slot.style.fontSize = '16px';
-          slot.style.fontWeight = 'bold';
-        } else {
-          slot.textContent = '';
-          slot.style.background = i === player.selectedSlot ? `rgba(200, 200, 50, 0.5)` : 'rgba(255, 255, 255, 0.1)';
-        }
-      }
-
-      // Update crafting grid
-      const craftingSlots = craftingGrid.children;
-      for (let i = 0; i < 9; i++) {
-        const slot = craftingSlots[i];
-        const item = player.craftingGrid[i];
-        if (item) {
-          slot.textContent = `${itemTextures[item.id]} ${item.count}`;
-          slot.style.background = `rgba(100, 100, 100, 0.5)`;
-        } else {
-          slot.textContent = '';
-          slot.style.background = 'rgba(255, 255, 255, 0.1)';
-        }
-      }
-
-      // Check crafting result
-      updateCraftingResult();
-    }
-
-    function updateCraftingResult() {
-      const craftingPattern = [];
-      for (let i = 0; i < 9; i++) {
-        craftingPattern[i] = player.craftingGrid[i]?.id || null;
-      }
-
-      let result = null;
-      for (const [recipeName, pattern] of Object.entries(recipes)) {
-        if (arraysEqual(craftingPattern, pattern.flat())) {
-          result = recipeName;
-          break;
-        }
-      }
-
-      if (result) {
-        craftingResult.textContent = itemTextures[result];
-        craftingResult.style.background = `rgba(100, 100, 100, 0.5)`;
-        craftingResult.onclick = () => craftItem(result);
-      } else {
-        craftingResult.textContent = '';
-        craftingResult.style.background = 'rgba(255, 255, 255, 0.1)';
-        craftingResult.onclick = null;
-      }
-    }
-
-    function craftItem(itemId) {
-      // Remove ingredients
-      const recipe = recipes[itemId];
-      for (let i = 0; i < 9; i++) {
-        if (recipe.flat()[i]) {
-          player.craftingGrid[i].count--;
-          if (player.craftingGrid[i].count <= 0) {
-            player.craftingGrid[i] = null;
-          }
-        }
-      }
-
-      // Add result to inventory
-      addItemToInventory(itemId, 1);
-      updateInventoryDisplay();
-    }
-
-    function arraysEqual(a, b) {
-      if (a.length !== b.length) return false;
-      for (let i = 0; i < a.length; i++) {
-        if (a[i] !== b[i]) return false;
-      }
-      return true;
-    }
-
-    function selectInventorySlot(slotIndex) {
-      player.selectedSlot = slotIndex;
-      updateInventoryDisplay();
-    }
-
-    function selectCraftingSlot(slotIndex) {
-      // For now, just log - we'll implement drag and drop later
-      console.log('Selected crafting slot:', slotIndex);
-    }
-
-    function getSelectedItem() {
-      return player.inventory[player.selectedSlot];
-    }
-
-    function startGame() {
-      try {
-        console.log('🔵 Button clicked!');
-        const worldName = worldNameInput.value.trim() || 'New World';
-        const seed = worldSeedInput.value.trim();
-        console.log('Starting world:', worldName, 'seed:', seed);
-        startScreen.style.display = 'none';
-        document.body.classList.add('game-active');
-        isLocked = true;
-        ui.style.display = 'block';
-        healthBar.style.display = 'flex';
-        
-        console.log('🟢 About to generate world...');
-        // Start generating the game world
-        startGameWorld();
-        console.log('🟠 World generated!');
-        
-        prevTime = performance.now();
-
-        // Reset mouse position tracking
-        prevMouseX = window.innerWidth / 2;
-        prevMouseY = window.innerHeight / 2;
-        console.log('✅ Game started, isLocked:', isLocked);
-      } catch (err) {
-        console.error('❌ Error starting game:', err);
-        alert('Error starting game: ' + err.message);
-      }
-    }
-
-    function generateChunk(chunkX, chunkZ) {
-      try {
-        const chunkKey = `${chunkX},${chunkZ}`;
-        if (loadedChunks.has(chunkKey)) return;
-        loadedChunks.add(chunkKey);
-
-        for (let x = 0; x < CHUNK_SIZE; x++) {
-          for (let z = 0; z < CHUNK_SIZE; z++) {
-            const worldX = chunkX * CHUNK_SIZE + x;
-            const worldZ = chunkZ * CHUNK_SIZE + z;
-
-            // Improved terrain generation with better variation
-            const baseHeight = Math.sin(worldX * 0.05) * 3 + Math.cos(worldZ * 0.05) * 3 + 12;
-            const height = Math.floor(baseHeight + Math.random() * 4);
-            
-            for (let y = 0; y < height; y++) {
-              let blockType = 'dirt';
-              
-              // Grass on top
-              if (y === height - 1) blockType = 'grass';
-              
-              // Stone/dirt layer
-              else if (y > height - 4) blockType = y === height - 2 ? 'dirt' : 'stone';
-              
-              // Ore deposits with Minecraft-like distribution
-              else if (y < height - 5) {
-                const oreRoll = Math.random();
-                // Coal everywhere, common
-                if (oreRoll < 0.12) blockType = 'coal_ore';
-                // Iron deep
-                else if (y < 30 && oreRoll < 0.08) blockType = 'iron_ore';
-                // Gold very deep
-                else if (y < 20 && oreRoll < 0.05) blockType = 'gold_ore';
-                // Diamond rare and very deep
-                else if (y < 16 && oreRoll < 0.02) blockType = 'diamond_ore';
-                else blockType = 'stone';
-              }
-              
-              placeBlock(worldX, y, worldZ, blockType);
-            }
-          }
-        }
-      } catch (err) {
-        console.error('❌ Error generating chunk:', err);
-      }
-    }
-
-    function placeBlock(x, y, z, type) {
-      const key = `${x},${y},${z}`;
-      if (world[key]) {
-        scene.remove(world[key].mesh);
-      }
-
-      const geometry = new THREE.BoxGeometry(1, 1, 1);
-      geometry.computeVertexNormals();
-      const material = blockMaterials[type] || blockMaterials.stone;
-      const cube = new THREE.Mesh(geometry, material);
-      cube.position.set(x, y, z);
-      cube.castShadow = true;
-      cube.receiveShadow = true;
-      cube.userData = { type: type };
-
-      // Add subtle wireframe edges for block outlines
-      const edges = new THREE.EdgesGeometry(geometry);
-      const lineMaterial = new THREE.LineBasicMaterial({ color: 0x000000, opacity: 0.2, transparent: true, linewidth: 1 });
-      const wireframe = new THREE.LineSegments(edges, lineMaterial);
-      wireframe.position.z += 0.001; // Slight offset to prevent z-fighting
-      cube.add(wireframe);
-
-      scene.add(cube);
-      world[key] = { mesh: cube, type: type };
-    }
-
-    function removeBlock(x, y, z) {
-      const key = `${x},${y},${z}`;
-      if (world[key]) {
-        scene.remove(world[key].mesh);
-        delete world[key];
-      }
-    }
-
-    function breakBlock(x, y, z) {
-      const key = `${x},${y},${z}`;
-      if (world[key]) {
-        const blockType = world[key].type;
-        const properties = blockProperties[blockType];
-
-        if (properties) {
-          // Check if player has appropriate tool
-          const selectedItem = getSelectedItem();
-          let miningSpeed = 1;
-
-          if (selectedItem && items[selectedItem.id] && items[selectedItem.id].type === 'tool') {
-            const tool = items[selectedItem.id];
-            if (tool.toolType === properties.tool) {
-              miningSpeed = toolMaterials[tool.material].multiplier;
-            }
-          }
-
-          // Drop the block/item
-          let dropItem = blockType;
-          if (blockType === 'stone') dropItem = 'cobblestone';
-          else if (blockType === 'coal_ore') dropItem = 'coal';
-          else dropItem = properties.drops || blockType;
-          addItemToInventory(dropItem, 1);
-
-          // Give experience
-          player.experience += 1;
-          if (player.experience >= player.level * 10) {
-            player.level += 1;
-            player.experience = 0;
-          }
-        }
-
-        removeBlock(x, y, z);
-      }
-    }
-
-    function onKeyDown(event) {
-      switch (event.code) {
-        case 'ArrowUp':
-        case 'KeyW':
-          moveForward = true;
-          break;
-        case 'ArrowLeft':
-        case 'KeyA':
-          moveLeft = true;
-          break;
-        case 'ArrowDown':
-        case 'KeyS':
-          moveBackward = true;
-          break;
-        case 'ArrowRight':
-        case 'KeyD':
-          moveRight = true;
-          break;
-        case 'Space':
-          if (canJump) {
-            velocity.y += JUMP_FORCE;
-            canJump = false;
-          }
-          break;
-        case 'KeyE':
-          toggleInventory();
-          break;
-        case 'Digit1':
-        case 'Digit2':
-        case 'Digit3':
-        case 'Digit4':
-        case 'Digit5':
-        case 'Digit6':
-        case 'Digit7':
-        case 'Digit8':
-        case 'Digit9':
-          player.selectedSlot = parseInt(event.code.slice(-1)) - 1;
-          updateUI();
-          break;
-      }
-    }
-
-    function toggleInventory() {
-      inventoryOpen = !inventoryOpen;
-      fullInventory.style.display = inventoryOpen ? 'block' : 'none';
-      isLocked = !inventoryOpen;
-    }
-
-    function updateUI() {
-      const selected = getSelectedItem();
-      if (selected) {
-        const itemData = items[selected.id];
-        const texture = itemData ? (itemData.texture || selected.id) : selected.id;
-        selectedBlockEl.textContent = `${texture} ${selected.id}`;
-      } else {
-        selectedBlockEl.textContent = 'Empty';
-      }
-      updateHealthBar();
-    }
-
-    function animate() {
-      requestAnimationFrame(animate);
-
-      const time = performance.now();
-      const delta = time - prevTime;
-      prevTime = time;
-
-      // Update day/night cycle  
-      dayTime += delta * 0.0002;
-      const dayProgress = (dayTime % 24000) / 24000; // 120 second day cycle
-      const lightIntensity = Math.max(0.3, Math.cos(dayProgress * Math.PI * 2) * 0.8 + 0.5);
-      const skyColor = new THREE.Color();
-      skyColor.setHSL(0.6, 0.2, 0.3 + lightIntensity * 0.4);
-      scene.background = skyColor;
-      if (scene.fog) scene.fog.color = skyColor;
-      
-      // Update directional light
-      if (directionalLight) {
-        directionalLight.intensity = lightIntensity;
-      }
-
-      if (isLocked) {
-        // Update camera rotation
-        camera.rotation.order = 'YXZ';
-        camera.rotation.y = yaw;
-        camera.rotation.x = pitch;
-
-        // Movement
-        direction.set(0, 0, 0);
-        if (moveForward) direction.z -= 1;
-        if (moveBackward) direction.z += 1;
-        if (moveLeft) direction.x -= 1;
-        if (moveRight) direction.x += 1;
-
-        direction.applyEuler(new THREE.Euler(0, yaw, 0));
-        direction.normalize();
-
-        if (moveForward || moveBackward || moveLeft || moveRight) {
-          velocity.x = direction.x * MOVE_SPEED;
-          velocity.z = direction.z * MOVE_SPEED;
-        } else {
-          velocity.x *= 0.8;
-          velocity.z *= 0.8;
-        }
-
-        // Apply gravity
-        velocity.y += GRAVITY * delta * 0.001;
-
-        // Move camera
-        camera.position.x += velocity.x * delta * 0.001;
-        camera.position.y += velocity.y * delta * 0.001;
-        camera.position.z += velocity.z * delta * 0.001;
-
-        // Ground collision
-        const groundY = getGroundHeight(camera.position.x, camera.position.z);
-        if (camera.position.y <= groundY + 1.5) {
-          velocity.y = 0;
-          camera.position.y = groundY + 1.5;
-          canJump = true;
-        }
-
-        // Update chunks
-        updateChunks();
-
-        // Update mobs
-        updateMobs(delta);
-      }
-
-      // Update position display
-      positionEl.textContent = `${Math.round(camera.position.x)}, ${Math.round(camera.position.y)}, ${Math.round(camera.position.z)}`;
-
-      renderer.render(scene, camera);
-    }
-
-    function onKeyUp(event) {
-      switch (event.code) {
-        case 'ArrowUp':
-        case 'KeyW':
-          moveForward = false;
-          break;
-        case 'ArrowLeft':
-        case 'KeyA':
-          moveLeft = false;
-          break;
-        case 'ArrowDown':
-        case 'KeyS':
-          moveBackward = false;
-          break;
-        case 'ArrowRight':
-        case 'KeyD':
-          moveRight = false;
-          break;
-      }
-    }
-
-    function onMouseClick(event) {
-      if (!isLocked || inventoryOpen) return;
-
-      const raycaster = new THREE.Raycaster();
-      const mouse = new THREE.Vector2();
-      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-      raycaster.setFromCamera(mouse, camera);
-
-      const meshes = Object.values(world).map(b => b.mesh).filter(m => m);
-      const intersects = raycaster.intersectObjects(meshes);
-      if (intersects.length > 0) {
-        const intersect = intersects[0];
-        const point = intersect.point;
-        const normal = intersect.face.normal;
-
-        const blockPos = new THREE.Vector3(
-          Math.floor(point.x - normal.x * 0.5),
-          Math.floor(point.y - normal.y * 0.5),
-          Math.floor(point.z - normal.z * 0.5)
-        );
-
-        breakBlock(blockPos.x, blockPos.y, blockPos.z);
-      }
-    }
-
-    function onRightClick(event) {
-      event.preventDefault();
-      if (!isLocked || inventoryOpen) return;
-
-      const raycaster = new THREE.Raycaster();
-      const mouse = new THREE.Vector2();
-      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-      raycaster.setFromCamera(mouse, camera);
-
-      const meshes = Object.values(world).map(b => b.mesh).filter(m => m);
-      const intersects = raycaster.intersectObjects(meshes);
-      if (intersects.length > 0) {
-        const intersect = intersects[0];
-        const point = intersect.point;
-        const normal = intersect.face.normal;
-
-        const blockPos = new THREE.Vector3(
-          Math.floor(point.x + normal.x * 0.5),
-          Math.floor(point.y + normal.y * 0.5),
-          Math.floor(point.z + normal.z * 0.5)
-        );
-
-        const selectedItem = getSelectedItem();
-        if (selectedItem && items[selectedItem.id]) {
-          const itemInfo = items[selectedItem.id];
-          if (itemInfo.type === 'block') {
-            placeBlock(blockPos.x, blockPos.y, blockPos.z, selectedItem.id);
-            selectedItem.count--;
-            if (selectedItem.count <= 0) {
-              player.inventory[player.selectedSlot] = null;
-            }
-            updateInventoryDisplay();
-          }
-        }
-      }
-    }
-
-    function onMouseMove(event) {
-      if (!isLocked) {
-        prevMouseX = event.clientX;
-        prevMouseY = event.clientY;
-        return;
-      }
-
-      const currentMouseX = event.clientX;
-      const currentMouseY = event.clientY;
-
-      const deltaX = currentMouseX - prevMouseX;
-      const deltaY = currentMouseY - prevMouseY;
-
-      prevMouseX = currentMouseX;
-      prevMouseY = currentMouseY;
-
-      const sensitivity = 0.002;
-      yaw -= deltaX * sensitivity;
-      pitch -= deltaY * sensitivity;
-
-      pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
-    }
-
-    function onWheel(event) {
-      if (inventoryOpen) return;
-      player.selectedSlot = (player.selectedSlot + (event.deltaY > 0 ? 1 : -1) + 9) % 9;
-      updateUI();
-    }
-
-    function onWindowResize() {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    }
-
-    function updateChunks() {
-      const playerChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
-      const playerChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
-
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dz = -1; dz <= 1; dz++) {
-          generateChunk(playerChunkX + dx, playerChunkZ + dz);
-        }
-      }
-    }
-
-    function spawnMobs() {
-      const mobTypes = ['pig', 'sheep', 'cow', 'chicken'];
-      for (let i = 0; i < 20; i++) {
-        const type = mobTypes[Math.floor(Math.random() * mobTypes.length)];
-        const x = (Math.random() - 0.5) * 100;
-        const z = (Math.random() - 0.5) * 100;
-        const y = 12;
-        createMob(type, x, y, z);
-      }
-    }
-
-    function createMob(type, x, y, z) {
-      const geometry = new THREE.BoxGeometry(1, 1, 1);
-      const material = new THREE.MeshLambertMaterial({ color: getMobColor(type) });
-      const mob = new THREE.Mesh(geometry, material);
-      mob.position.set(x, y, z);
-      mob.userData = { type, velocity: new THREE.Vector3(), targetX: x, targetZ: z, moveTimer: 0 };
-      scene.add(mob);
-      mobs.push(mob);
-    }
-
-    function getMobColor(type) {
-      const colors = {
-        pig: 0xFF69B4,
-        sheep: 0xFFFFFF,
-        cow: 0x8B4513,
-        chicken: 0xFFFF00
+    function castRay(maxDist) {
+      const dir = {
+        x: Math.sin(camera.yaw) * Math.cos(camera.pitch),
+        y: Math.sin(camera.pitch),
+        z: Math.cos(camera.yaw) * Math.cos(camera.pitch)
       };
-      return colors[type] || 0xFF0000;
+      for (let d = 0.5; d < maxDist; d += 0.2) {
+        const x = Math.floor(camera.x + dir.x * d);
+        const y = Math.floor(camera.y + dir.y * d);
+        const z = Math.floor(camera.z + dir.z * d);
+        if (world.has(`${x},${y},${z}`)) {
+          return { x, y, z, nx: Math.sign(dir.x) || 0, ny: Math.sign(dir.y) || 0, nz: Math.sign(dir.z) || 0 };
+        }
+      }
+      return null;
     }
 
-    function updateMobs(delta) {
-      mobs.forEach(mob => {
-        mob.userData.moveTimer -= delta;
-        if (mob.userData.moveTimer <= 0) {
-          mob.userData.targetX = mob.position.x + (Math.random() - 0.5) * 20;
-          mob.userData.targetZ = mob.position.z + (Math.random() - 0.5) * 20;
-          mob.userData.moveTimer = Math.random() * 3000 + 1000;
-        }
+    function placeBlock() {
+      const hit = castRay(6);
+      if (!hit) return;
+      const pxp = hit.x + (Math.abs(hit.nx) > 0 ? hit.nx : 0);
+      const pyp = hit.y + (Math.abs(hit.ny) > 0 ? hit.ny : 1);
+      const pzp = hit.z + (Math.abs(hit.nz) > 0 ? hit.nz : 0);
+      const key = `${pxp},${pyp},${pzp}`;
+      if (!world.has(key)) {
+        world.set(key, inventory[selectedIndex].block);
+      }
+    }
 
-        const dx = mob.userData.targetX - mob.position.x;
-        const dz = mob.userData.targetZ - mob.position.z;
-        const dist = Math.sqrt(dx * dx + dz * dz);
-        if (dist > 0.1) {
-          mob.userData.velocity.x = (dx / dist) * 2;
-          mob.userData.velocity.z = (dz / dist) * 2;
-        } else {
-          mob.userData.velocity.x = 0;
-          mob.userData.velocity.z = 0;
-        }
+    function removeBlock() {
+      const hit = castRay(6);
+      if (!hit) return;
+      world.delete(`${hit.x},${hit.y},${hit.z}`);
+    }
 
-        mob.position.x += mob.userData.velocity.x * delta * 0.001;
-        mob.position.z += mob.userData.velocity.z * delta * 0.001;
-
-        const groundY = getGroundHeight(mob.position.x, mob.position.z);
-        mob.position.y = groundY + 0.5;
+    function renderHotbar() {
+      hotbar.innerHTML = '';
+      inventory.forEach((slot, idx) => {
+        const el = document.createElement('div');
+        el.className = 'slot' + (idx === selectedIndex ? ' active' : '');
+        el.textContent = slot.block.name[0] + (slot.count > 1 ? slot.count : '');
+        hotbar.appendChild(el);
       });
     }
 
-    function getGroundHeight(x, z) {
-      for (let y = WORLD_HEIGHT; y >= 0; y--) {
-        if (world[`${Math.floor(x)},${y},${Math.floor(z)}`]) {
-          return y + 1;
-        }
-      }
-      return 10;
+    function loop() {
+      update();
+      drawWorld();
+      renderHotbar();
+      requestAnimationFrame(loop);
     }
 
-    init();
+    window.addEventListener('keydown', e => {
+      keys[e.key.toLowerCase()] = true;
+      if (e.key === 'c') camera.crouch = !camera.crouch;
+      if (e.key >= '1' && e.key <= '4') selectedIndex = Number(e.key) - 1;
+    });
+    window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+    window.addEventListener('mousemove', e => {
+      if (document.pointerLockElement === canvas) {
+        camera.yaw -= e.movementX * 0.002;
+        camera.pitch -= e.movementY * 0.002;
+        camera.pitch = Math.max(-1.4, Math.min(1.4, camera.pitch));
+      }
+    });
+    canvas.addEventListener('click', () => canvas.requestPointerLock());
+    canvas.addEventListener('mousedown', e => {
+      mouseDown = true;
+      mouseButton = e.button;
+      if (e.button === 2) placeBlock();
+      if (e.button === 0) removeBlock();
+    });
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    renderHotbar();
+    loop();
   </script>
 </body>
 </html>
