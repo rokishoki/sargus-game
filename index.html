@@ -345,9 +345,13 @@
     // ==================== GAME STATE ====================
     class Game {
       constructor() {
+        console.log('Game constructor called');
         this.canvas = document.getElementById('gameCanvas');
         this.ctx = this.canvas.getContext('2d');
+        console.log('Canvas:', this.canvas, 'Context:', this.ctx);
+        
         this.world = new World();
+        console.log('World created');
         
         this.camera = {
           x: 128,
@@ -378,6 +382,7 @@
         
         this.setupEventListeners();
         this.resizeCanvas();
+        console.log('Game setup complete, starting game loop');
         this.gameLoop();
       }
 
@@ -487,8 +492,8 @@
 
         if (this.mouse.button === 0) {
           // Mine
-          this.world.setBlock(hit.x, hit.y, hit.z, BLOCK_TYPES.AIR);
           const block = this.world.getBlock(hit.x, hit.y, hit.z);
+          this.world.setBlock(hit.x, hit.y, hit.z, BLOCK_TYPES.AIR);
           if (ITEM_DROPS[block]) {
             const drop = ITEM_DROPS[block];
             if (Math.random() < drop.chance) {
@@ -555,11 +560,15 @@
         const centerX = this.canvas.width / 2;
         const centerY = this.canvas.height / 2;
 
-        const chunks = this.getVisibleChunks();
+        const chunkArrays = this.getVisibleChunks();
         const voxels = [];
 
-        for (const [, chunkData] of chunks) {
+        for (const chunkData of chunkArrays) {
           voxels.push(...chunkData);
+        }
+
+        if (this.frameCount % 60 === 0) {
+          console.log('Frame:', this.frameCount, 'Chunks:', chunkArrays.length, 'Voxels:', voxels.length);
         }
 
         voxels.sort((a, b) => b.dist - a.dist);
@@ -573,7 +582,6 @@
 
       getVisibleChunks() {
         const result = [];
-        const chunks = new Map();
         
         const chunkX = Math.floor(this.camera.x / this.world.CHUNK_SIZE);
         const chunkZ = Math.floor(this.camera.z / this.world.CHUNK_SIZE);
@@ -608,7 +616,7 @@
             }
 
             if (voxels.length > 0) {
-              result.push([null, voxels]);
+              result.push(voxels);
             }
           }
         }
@@ -746,9 +754,31 @@
     }
 
     // ==================== START GAME ====================
+    console.log('Script loaded');
     window.addEventListener('DOMContentLoaded', () => {
-      const game = new Game();
+      console.log('DOM Content Loaded');
+      try {
+        const game = new Game();
+        console.log('Game initialized');
+      } catch (e) {
+        console.error('Game initialization error:', e);
+      }
     });
+    
+    // Fallback if DOMContentLoaded fires before script
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        console.log('Late DOM Content Loaded');
+      });
+    } else {
+      console.log('Document already loaded, initializing...');
+      try {
+        const game = new Game();
+        console.log('Game initialized (late)');
+      } catch (e) {
+        console.error('Game initialization error (late):', e);
+      }
+    }
   </script>
 </body>
 </html>
