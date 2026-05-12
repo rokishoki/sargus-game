@@ -1,4 +1,252 @@
 <!DOCTYPE html>
+<html>
+<head>
+  <title>Minecraft</title>
+  <style>
+    body { margin: 0; padding: 0; overflow: hidden; background: black; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #ui { position: absolute; top: 20px; left: 20px; color: white; font-family: Arial; font-size: 14px; }
+    #pos { position: absolute; top: 20px; right: 20px; color: white; font-family: Arial; font-size: 12px; text-align: right; }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="ui">FPS: <span id="fps">0</span><br>Pos: <span id="xyz">0,0,0</span></div>
+  <div id="pos">WASD Move | Space Jump<br>LMB Mine | RMB Build | 1-8 Select</div>
+
+  <script>
+    const STONE = 1, DIRT = 2, GRASS = 3, WOOD = 4, IRON = 8, DIAMOND = 10;
+    const COLORS = { 1: '#888888', 2: '#8B6F47', 3: '#5BA93C', 4: '#654321', 8: '#A68A64', 10: '#5CCFE7' };
+    const NAMES = { 1: 'Stone', 2: 'Dirt', 3: 'Grass', 4: 'Wood', 8: 'Iron', 10: 'Diamond' };
+
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    let chunks = {};
+    let playerX = 0, playerY = 35, playerZ = 0;
+    let playerPitch = -0.3, playerYaw = 0;
+    let velocityY = 0;
+    let keys = {};
+    let mouseDown = false, mouseButton = 0;
+    let selectedSlot = 0;
+    let inventory = [{ id: WOOD, count: 32 }];
+    let frameCount = 0, fpsTime = Date.now(), fpsCounter = 0;
+
+    function loadChunk(cx, cz) {
+      const key = cx + ',' + cz;
+      if (chunks[key]) return chunks[key];
+      
+      const chunk = {};
+      for (let x = 0; x < 16; x++) {
+        for (let z = 0; z < 16; z++) {
+          const wx = cx * 16 + x;
+          const wz = cz * 16 + z;
+          const h = Math.floor(30 + Math.sin(wx * 0.1) * 5 + Math.cos(wz * 0.1) * 5);
+          
+          for (let y = 0; y < h - 3; y++) chunk[x + ',' + y + ',' + z] = STONE;
+          for (let y = h - 3; y < h - 1; y++) chunk[x + ',' + y + ',' + z] = DIRT;
+          if (h - 1 >= 0) chunk[x + ',' + (h - 1) + ',' + z] = GRASS;
+
+          // Ore generation
+          if (Math.random() > 0.98 && h > 20) chunk[x + ',' + Math.floor(h - 10) + ',' + z] = IRON;
+          if (Math.random() > 0.99 && h > 30) chunk[x + ',' + Math.floor(h - 20) + ',' + z] = DIAMOND;
+        }
+      }
+      
+      chunks[key] = chunk;
+      return chunk;
+    }
+
+    function getBlock(x, y, z) {
+      const cx = Math.floor(x / 16);
+      const cz = Math.floor(z / 16);
+      const lx = ((x % 16) + 16) % 16;
+      const lz = ((z % 16) + 16) % 16;
+      const chunk = loadChunk(cx, cz);
+      return chunk[lx + ',' + y + ',' + lz] || 0;
+    }
+
+    function setBlock(x, y, z, id) {
+      const cx = Math.floor(x / 16);
+      const cz = Math.floor(z / 16);
+      const lx = ((x % 16) + 16) % 16;
+      const lz = ((z % 16) + 16) % 16;
+      const chunk = loadChunk(cx, cz);
+      chunk[lx + ',' + y + ',' + lz] = id;
+    }
+
+    function raycast(dist) {
+      const dx = Math.cos(playerPitch) * Math.sin(playerYaw);
+      const dy = Math.sin(playerPitch);
+      const dz = Math.cos(playerPitch) * Math.cos(playerYaw);
+
+      for (let d = 0.1; d < dist; d += 0.2) {
+        const x = Math.floor(playerX + dx * d);
+        const y = Math.floor(playerY + dy * d);
+        const z = Math.floor(playerZ + dz * d);
+
+        if (getBlock(x, y, z) !== 0) {
+          return { x, y, z, dx, dy, dz };
+        }
+      }
+      return null;
+    }
+
+    function update() {
+      const speed = 0.15;
+      const forward = (keys['w'] ? 1 : 0) - (keys['s'] ? 1 : 0);
+      const right = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
+
+      const moveX = Math.cos(playerYaw) * forward + Math.sin(playerYaw) * right;
+      const moveZ = Math.sin(playerYaw) * forward - Math.cos(playerYaw) * right;
+
+      playerX += moveX * speed;
+      playerZ += moveZ * speed;
+
+      // Gravity
+      let groundY = 0;
+      for (let y = 63; y >= 0; y--) {
+        if (getBlock(Math.floor(playerX), y, Math.floor(playerZ)) !== 0) {
+          groundY = y;
+          break;
+        }
+      }
+
+      if (playerY > groundY + 1.62) {
+        velocityY -= 0.01;
+      } else {
+        velocityY = 0;
+      }
+
+      if (keys[' '] && playerY <= groundY + 1.62 + 0.1) {
+        velocityY = 0.2;
+      }
+
+      playerY += velocityY;
+      if (playerY < groundY + 1.62) {
+        playerY = groundY + 1.62;
+        velocityY = 0;
+      }
+    }
+
+    function render() {
+      // Draw sky
+      ctx.fillStyle = '#87CEEB';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const fov = Math.PI / 4;
+      const perspective = canvas.width / (2 * Math.tan(fov / 2));
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+
+      // Collect visible blocks
+      const voxels = [];
+      const chunkX = Math.floor(playerX / 16);
+      const chunkZ = Math.floor(playerZ / 16);
+
+      for (let cx = chunkX - 1; cx <= chunkX + 1; cx++) {
+        for (let cz = chunkZ - 1; cz <= chunkZ + 1; cz++) {
+          const chunk = loadChunk(cx, cz);
+          for (let lx = 0; lx < 16; lx++) {
+            for (let y = 15; y < 45; y++) {
+              for (let lz = 0; lz < 16; lz++) {
+                const blockId = chunk[lx + ',' + y + ',' + lz];
+                if (blockId !== 0) {
+                  const wx = cx * 16 + lx;
+                  const wz = cz * 16 + lz;
+                  const dist = Math.hypot(wx - playerX, y - playerY, wz - playerZ);
+                  if (dist < 50) {
+                    voxels.push({ x: wx, y, z: wz, id: blockId, dist });
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      voxels.sort((a, b) => b.dist - a.dist);
+
+      // Draw blocks
+      for (const v of voxels) {
+        const dx = v.x - playerX;
+        const dy = v.y - playerY;
+        const dz = v.z - playerZ;
+
+        const cosY = Math.cos(playerYaw);
+        const sinY = Math.sin(playerYaw);
+        const cosP = Math.cos(playerPitch);
+        const sinP = Math.sin(playerPitch);
+
+        let rx = dx * cosY - dz * sinY;
+        let rz = dx * sinY + dz * cosY;
+        let ry = dy;
+
+        const ty = ry * cosP - rz * sinP;
+        rz = ry * sinP + rz * cosP;
+
+        if (rz > 0.1) {
+          const sx = centerX + (rx / rz) * perspective;
+          const sy = centerY - (ty / rz) * perspective;
+          const size = Math.max(1, perspective / rz * 0.8);
+
+          ctx.fillStyle = COLORS[v.id] || '#808080';
+          ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
+          ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(sx - size / 2, sy - size / 2, size, size);
+        }
+      }
+
+      // Update FPS
+      frameCount++;
+      const now = Date.now();
+      if (now - fpsTime > 200) {
+        fpsCounter = Math.round(frameCount / ((now - fpsTime) / 1000));
+        frameCount = 0;
+        fpsTime = now;
+      }
+      document.getElementById('fps').textContent = fpsCounter;
+      document.getElementById('xyz').textContent = Math.floor(playerX) + ',' + Math.floor(playerY) + ',' + Math.floor(playerZ);
+    }
+
+    function gameLoop() {
+      update();
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Input handlers
+    window.addEventListener('keydown', (e) => {
+      keys[e.key.toLowerCase()] = true;
+      if (e.key >= '1' && e.key <= '8') selectedSlot = parseInt(e.key) - 1;
+    });
+    window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+
+    window.addEventListener('mousemove', (e) => {
+      playerYaw -= e.movementX * 0.004;
+      playerPitch -= e.movementY * 0.004;
+      playerPitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, playerPitch));
+    });
+
+    document.addEventListener('mousedown', (e) => {
+      mouseDown = true;
+      mouseButton = e.button;
+      canvas.requestPointerLock?.();
+    });
+    document.addEventListener('mouseup', () => mouseDown = false);
+
+    window.addEventListener('resize', () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    });
+
+    gameLoop();
+  </script>
+</body>
+</html><!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
