@@ -119,7 +119,17 @@
     </div>
   </div>
 
+  <div id="levelComplete" class="overlay hidden">
+    <div class="card">
+      <h1 id="levelTitle">שלב הושלם!</h1>
+      <p id="levelText">אספת את כל הזבל בזמן! לחץ להמשך לשלב הבא.</p>
+      <button id="nextLevelButton">שלב הבא</button>
+    </div>
+  </div>
+
   <div id="hud">
+    <div class="hud-item"><strong>שלב</strong><span id="level">1</span></div>
+    <div class="hud-item"><strong>זמן</strong><span id="timer">00:00</span></div>
     <div class="hud-item"><strong>ניקוי</strong><span id="score">0</span></div>
     <div class="hud-item"><strong>זבל שנשאר</strong><span id="remaining">0</span></div>
     <div class="hud-item"><strong>מטבעות</strong><span id="coins">0</span></div>
@@ -150,9 +160,15 @@
     const remainingLabel = document.getElementById('remaining');
     const coinsLabel = document.getElementById('coins');
     const currentSkinLabel = document.getElementById('currentSkin');
+    const levelLabel = document.getElementById('level');
+    const timerLabel = document.getElementById('timer');
     const lobbyCoins = document.getElementById('lobbyCoins');
     const endTitle = document.getElementById('endTitle');
     const endText = document.getElementById('endText');
+    const levelComplete = document.getElementById('levelComplete');
+    const levelTitle = document.getElementById('levelTitle');
+    const levelText = document.getElementById('levelText');
+    const nextLevelButton = document.getElementById('nextLevelButton');
 
     let width = 0;
     let height = 0;
@@ -162,7 +178,13 @@
     let trashItems = [];
     let gameStarted = false;
     let gameEnded = false;
+    let level = 1;
+    let timeLeft = 0;
+    let suckEffects = [];
     let gameData = { coins: 0, ownedSkins: ['default'], selectedSkin: 'default' };
+    const LEVEL_BASE_TIME = 28;
+    const LEVEL_TIME_DECREASE = 3;
+    const TRASH_BASE = 10;
 
     const fish = {
       x: 0,
@@ -219,31 +241,41 @@
 
     function createTrash() {
       trashItems = [];
-      const count = 14;
+      const count = TRASH_BASE + (level - 1) * 2;
       for (let i = 0; i < count; i++) {
         const type = trashTypes[Math.floor(Math.random() * trashTypes.length)];
+        const speedMultiplier = 1 + (level - 1) * 0.16;
         trashItems.push({
           x: getRandom(90, width - 90),
           y: getRandom(90, height - 140),
           type,
           wobble: Math.random() * Math.PI * 2,
-          speedX: getRandom(-24, 24),
-          speedY: getRandom(-12, 12)
+          speedX: getRandom(-24 * speedMultiplier, 24 * speedMultiplier),
+          speedY: getRandom(-12 * speedMultiplier, 12 * speedMultiplier)
         });
       }
       remainingLabel.textContent = `שאר זבל: ${trashItems.length}`;
     }
 
+    function startLevel() {
+      timeLeft = Math.max(10, LEVEL_BASE_TIME - (level - 1) * LEVEL_TIME_DECREASE);
+      fish.speed = 260 + (level - 1) * 14;
+      suckEffects = [];
+      createTrash();
+      updateHud();
+      shop.classList.add('hidden');
+      gameOver.classList.add('hidden');
+      levelComplete.classList.add('hidden');
+    }
+
     function initGame() {
+      level = 1;
       score = 0;
       gameEnded = false;
       fish.x = width / 2;
       fish.y = height / 2;
       fish.rotation = 0;
-      createTrash();
-      updateHud();
-      shop.classList.add('hidden');
-      gameOver.classList.add('hidden');
+      startLevel();
     }
 
     function updateHud() {
@@ -252,6 +284,10 @@
       coinsLabel.textContent = gameData.coins;
       lobbyCoins.textContent = gameData.coins;
       currentSkinLabel.textContent = getSkin(gameData.selectedSkin).name;
+      levelLabel.textContent = level;
+      const minutes = Math.floor(timeLeft / 60);
+      const seconds = Math.max(0, Math.floor(timeLeft % 60));
+      timerLabel.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
     }
 
     function drawBackground() {
@@ -294,6 +330,20 @@
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
+      if (skin.id === 'default') {
+        ctx.strokeStyle = '#8cb3d5';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-size * 0.4, -size * 0.18);
+        ctx.lineTo(size * 0.1, -size * 0.18);
+        ctx.moveTo(-size * 0.4, size * 0.18);
+        ctx.lineTo(size * 0.1, size * 0.18);
+        ctx.stroke();
+        ctx.fillStyle = '#cfe4ff';
+        ctx.beginPath();
+        ctx.ellipse(size * 0.15, 0, 8, 16, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.fillStyle = skin.stripe;
       for (let i = 0; i < 3; i++) {
         ctx.beginPath();
@@ -309,6 +359,16 @@
       ctx.beginPath();
       ctx.arc(size * 0.28, -size * 0.14, size * 0.08, 0, Math.PI * 2);
       ctx.fill();
+      if (skin.id === 'default') {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#8cb3d5';
+        ctx.beginPath();
+        ctx.moveTo(size * 0.4, -size * 0.1);
+        ctx.lineTo(size * 0.7, -size * 0.12);
+        ctx.moveTo(size * 0.4, size * 0.1);
+        ctx.lineTo(size * 0.7, size * 0.08);
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
@@ -351,6 +411,38 @@
       });
     }
 
+    function addSuckEffect(item) {
+      suckEffects.push({ x: item.x, y: item.y, progress: 0, alpha: 1 });
+    }
+
+    function updateSuckEffects(dt) {
+      for (let i = suckEffects.length - 1; i >= 0; i--) {
+        const effect = suckEffects[i];
+        effect.progress += dt * 2.8;
+        effect.alpha = 1 - effect.progress;
+        if (effect.progress >= 1) {
+          suckEffects.splice(i, 1);
+        }
+      }
+    }
+
+    function drawSuckEffects() {
+      suckEffects.forEach((effect) => {
+        const px = effect.x + (fish.x - effect.x) * effect.progress;
+        const py = effect.y + (fish.y - effect.y) * effect.progress;
+        ctx.strokeStyle = `rgba(255,255,255,${effect.alpha})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(effect.x, effect.y);
+        ctx.lineTo(px, py);
+        ctx.stroke();
+        ctx.fillStyle = `rgba(255,255,255,${effect.alpha * 0.8})`;
+        ctx.beginPath();
+        ctx.arc(px, py, 4 * effect.alpha + 1, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
     function updateFish(dt) {
       const direction = { x: 0, y: 0 };
       if (keys['ArrowLeft'] || keys['a'] || keys['A']) direction.x -= 1;
@@ -378,13 +470,14 @@
         if (distance < fish.size * 0.8 + item.type.radius * 0.6) {
           score += item.type.points;
           gameData.coins += item.type.coins;
+          addSuckEffect(item);
           trashItems.splice(i, 1);
           saveData();
           updateHud();
         }
       }
       if (trashItems.length === 0 && !gameEnded) {
-        endGame(true);
+        completeLevel();
       }
     }
 
@@ -400,16 +493,41 @@
       }
     }
 
+    function completeLevel() {
+      gameEnded = true;
+      levelTitle.textContent = 'שלב הושלם!';
+      levelText.textContent = `אספת את כל הזבל בשלב ${level}. לחץ למעבר לשלב הבא.`;
+      levelComplete.classList.remove('hidden');
+    }
+
+    function nextLevel() {
+      level += 1;
+      gameEnded = false;
+      fish.x = width / 2;
+      fish.y = height / 2;
+      startLevel();
+    }
+
     function update(dt) {
       if (!gameStarted || gameEnded) return;
+      timeLeft -= dt;
+      if (timeLeft <= 0) {
+        timeLeft = 0;
+        updateHud();
+        endGame(false);
+        return;
+      }
       updateFish(dt);
       updateTrash(dt);
       checkCollisions();
+      updateSuckEffects(dt);
+      updateHud();
     }
 
     function draw() {
       drawBackground();
       trashItems.forEach(drawTrash);
+      drawSuckEffects();
       drawFish();
     }
 
@@ -502,6 +620,11 @@
       initGame();
     });
 
+    nextLevelButton.addEventListener('click', () => {
+      levelComplete.classList.add('hidden');
+      nextLevel();
+    });
+
     openShop.addEventListener('click', openShopOverlay);
     closeShop.addEventListener('click', closeShopOverlay);
 
@@ -513,4 +636,3 @@
   </script>
 </body>
 </html>
-
