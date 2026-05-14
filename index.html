@@ -1,604 +1,516 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Flat Block World</title>
+  <title>סרגוס מנקה את הים</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { overflow: hidden; background: #111; color: #fff; font-family: Arial, sans-serif; }
+    html, body { width: 100%; height: 100%; }
+    body { overflow: hidden; font-family: 'Arial', sans-serif; background: #06192a; color: #f8f8ff; }
     canvas { display: block; width: 100vw; height: 100vh; }
-    #overlay {
+    .overlay {
       position: absolute;
-      top: 18px;
-      left: 18px;
-      z-index: 10;
-      font-size: 13px;
-      line-height: 1.6;
-      text-shadow: 0 0 8px rgba(0,0,0,0.8);
-    }
-    #hotbar {
-      position: absolute;
-      bottom: 18px;
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      gap: 6px;
-      z-index: 10;
-    }
-    .slot {
-      width: 36px;
-      height: 36px;
-      border: 2px solid rgba(255,255,255,0.45);
+      inset: 0;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 12px;
+      background: rgba(2, 17, 42, 0.78);
+      z-index: 10;
+      padding: 20px;
+    }
+    .hidden { display: none; }
+    .card {
+      width: min(460px, 100%);
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 28px;
+      box-shadow: 0 22px 70px rgba(0,0,0,0.42);
+      padding: 28px 24px;
+      text-align: center;
+      backdrop-filter: blur(14px);
+    }
+    h1 { margin-bottom: 12px; font-size: 2.2rem; letter-spacing: 0.04em; }
+    p { margin-bottom: 22px; color: #dce8ff; line-height: 1.65; }
+    button {
+      border: none;
+      border-radius: 16px;
+      padding: 14px 24px;
+      background: linear-gradient(135deg, #35c4ff, #1a85ff);
       color: #fff;
-      background: rgba(0,0,0,0.5);
+      font-size: 1rem;
+      cursor: pointer;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
+      box-shadow: 0 12px 30px rgba(17, 99, 228, 0.28);
     }
-    .slot.active { border-color: #fff; }
-    .crosshair {
+    button:hover { transform: translateY(-2px); box-shadow: 0 16px 34px rgba(17, 99, 228, 0.34); }
+    #hud {
       position: absolute;
-      left: 50%;
-      top: 50%;
-      width: 16px;
-      height: 16px;
-      transform: translate(-50%, -50%);
-      pointer-events: none;
-      z-index: 10;
+      inset: auto 18px 18px 18px;
+      z-index: 5;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, auto));
+      gap: 12px;
+      align-items: start;
+      font-size: 0.98rem;
+      line-height: 1.4;
     }
-    .crosshair::before, .crosshair::after {
-      content: '';
-      position: absolute;
-      background: #fff;
+    .hud-item {
+      background: rgba(0,0,0,0.28);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 18px;
+      padding: 12px 16px;
+      backdrop-filter: blur(8px);
+      min-width: 120px;
     }
-    .crosshair::before { left: 2px; top: 7px; width: 12px; height: 1px; }
-    .crosshair::after { left: 7px; top: 2px; width: 1px; height: 12px; }
-  </style>
-</head>
-<body>
-  <canvas id="canvas"></canvas>
-  <div id="overlay">
-    Click the canvas to enable look<br>
-    WASD Move | Space Jump | C Crouch<br>
-    Left click remove | Right click place<br>
-    1-4 select block slot
-  </div>
-  <div id="hotbar"></div>
-  <div class="crosshair"></div>
-
-  <script>
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const hotbar = document.getElementById('hotbar');
-
-    function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    }
-    resize();
-    window.addEventListener('resize', resize);
-
-    const BLOCKS = [
-      { id: 1, name: 'Grass', color: '#5BA93C' },
-      { id: 2, name: 'Dirt', color: '#8B6F47' },
-      { id: 3, name: 'Stone', color: '#888888' },
-      { id: 4, name: 'Wood', color: '#8B5D2B' }
-    ];
-
-    const inventory = [
-      { block: BLOCKS[0], count: 32 },
-      { block: BLOCKS[1], count: 20 },
-      { block: BLOCKS[2], count: 12 },
-      { block: BLOCKS[3], count: 16 }
-    ];
-    let selectedSlot = 0;
-    const world = new Map();
-    const GRID = 10;
-
-    for (let x = -GRID; x <= GRID; x++) {
-      for (let z = -GRID; z <= GRID; z++) {
-        world.set(`${x},0,${z}`, BLOCKS[0]);
-      }
-    }
-
-    const camera = {
-      x: 0,
-      y: 7,
-      z: -12,
-      yaw: 0,
-      pitch: -0.25,
-      speed: 0.18,
-      vy: 0,
-      crouch: false
-    };
-
-    const keys = {};
-
-    function project(point) {
-      const dx = point.x - camera.x;
-      const dy = point.y - camera.y;
-      const dz = point.z - camera.z;
-      const cosY = Math.cos(camera.yaw);
-      const sinY = Math.sin(camera.yaw);
-      const cosP = Math.cos(camera.pitch);
-      const sinP = Math.sin(camera.pitch);
-      const rx = dx * cosY - dz * sinY;
-      const rz = dx * sinY + dz * cosY;
-      const ry = dy;
-      const ty = ry * cosP - rz * sinP;
-      const tz = ry * sinP + rz * cosP;
-      if (tz <= 0.2) return null;
-      const scale = 600 / tz;
-      return {
-        x: canvas.width / 2 + rx * scale,
-        y: canvas.height / 2 - ty * scale,
-        s: scale
-      };
-    }
-
-    function blockCorners(x, y, z) {
-      return [
-        { x, y, z },
-        { x + 1, y, z },
-        { x + 1, y + 1, z },
-        { x, y + 1, z },
-        { x, y, z + 1 },
-        { x + 1, y, z + 1 },
-        { x + 1, y + 1, z + 1 },
-        { x, y + 1, z + 1 }
-      ];
-    }
-
-    const faces = [
-      [0,1,2,3],
-      [4,5,6,7],
-      [0,1,5,4],
-      [3,2,6,7],
-      [0,3,7,4],
-      [1,2,6,5]
-    ];
-
-    function shadeColor(hex, factor) {
-      const value = parseInt(hex.slice(1), 16);
-      const r = Math.round(((value >> 16) & 255) * factor);
-      const g = Math.round(((value >> 8) & 255) * factor);
-      const b = Math.round((value & 255) * factor);
-      return `rgb(${r},${g},${b})`;
-    }
-
-    function drawBlock(x, y, z, block) {
-      const pts = blockCorners(x, y, z).map(project);
-      if (pts.some((p) => p === null)) return;
-      const order = [1, 0, 2, 3, 4, 5];
-      order.forEach((faceIndex) => {
-        const face = faces[faceIndex].map((i) => pts[i]);
-        ctx.beginPath();
-        ctx.moveTo(face[0].x, face[0].y);
-        face.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        const shade = faceIndex === 1 ? 0.82 : (faceIndex === 2 || faceIndex === 3 ? 0.9 : 1);
-        ctx.fillStyle = shadeColor(block.color, shade);
-        ctx.fill();
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      });
-    }
-
-    function drawWorld() {
-      ctx.fillStyle = '#87CEEB';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      const blocks = [];
-      world.forEach((block, key) => {
-        const [x, y, z] = key.split(',').map(Number);
-        const center = project({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
-        if (!center) return;
-        blocks.push({ x, y, z, block, depth: center.y });
-      });
-      blocks.sort((a, b) => b.depth - a.depth);
-      blocks.forEach((entry) => drawBlock(entry.x, entry.y, entry.z, entry.block));
-    }
-
-    function groundHeight(x, z) {
-      for (let y = 2; y >= 0; y--) {
-        if (world.has(`${x},${y},${z}`)) return y;
-      }
-      return -1;
-    }
-
-    function update() {
-      const forward = (keys['w'] ? 1 : 0) - (keys['s'] ? 1 : 0);
-      const right = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
-      const dx = Math.sin(camera.yaw) * forward + Math.cos(camera.yaw) * right;
-      const dz = Math.cos(camera.yaw) * forward - Math.sin(camera.yaw) * right;
-      camera.x += dx * camera.speed;
-      camera.z += dz * camera.speed;
-      const ground = groundHeight(Math.floor(camera.x), Math.floor(camera.z));
-      if (!camera.crouch) camera.vy -= 0.01;
-      if (keys[' '] && Math.abs(camera.y - (ground + 2.2)) < 0.2) camera.vy = 0.22;
-      camera.y += camera.vy;
-      if (camera.y < ground + 2.2) {
-        camera.y = ground + 2.2;
-        camera.vy = 0;
-      }
-      if (camera.crouch) camera.y = ground + 1.7;
-    }
-
-    function castRay(maxDist) {
-      const dir = {
-        x: Math.sin(camera.yaw) * Math.cos(camera.pitch),
-        y: Math.sin(camera.pitch),
-        z: Math.cos(camera.yaw) * Math.cos(camera.pitch)
-      };
-      for (let d = 0.5; d < maxDist; d += 0.2) {
-        const x = Math.floor(camera.x + dir.x * d);
-        const y = Math.floor(camera.y + dir.y * d);
-        const z = Math.floor(camera.z + dir.z * d);
-        if (world.has(`${x},${y},${z}`)) {
-          return { x, y, z, nx: Math.sign(dir.x), ny: Math.sign(dir.y), nz: Math.sign(dir.z) };
-        }
-      }
-      return null;
-    }
-
-    function placeBlock() {
-      const hit = castRay(6);
-      if (!hit) return;
-      const tx = hit.x + (hit.nx !== 0 ? hit.nx : 0);
-      const ty = hit.y + (hit.ny !== 0 ? hit.ny : 1);
-      const tz = hit.z + (hit.nz !== 0 ? hit.nz : 0);
-      const key = `${tx},${ty},${tz}`;
-      if (!world.has(key)) {
-        world.set(key, inventory[selectedSlot].block);
-      }
-    }
-
-    function removeBlock() {
-      const hit = castRay(6);
-      if (!hit) return;
-      world.delete(`${hit.x},${hit.y},${hit.z}`);
-    }
-
-    function renderHotbar() {
-      hotbar.innerHTML = '';
-      inventory.forEach((slot, idx) => {
-        const item = document.createElement('div');
-        item.className = 'slot' + (idx === selectedSlot ? ' active' : '');
-        item.textContent = slot.block.name[0] + (slot.count > 1 ? slot.count : '');
-        hotbar.appendChild(item);
-      });
-    }
-
-    function loop() {
-      update();
-      drawWorld();
-      renderHotbar();
-      requestAnimationFrame(loop);
-    }
-
-    window.addEventListener('keydown', (e) => {
-      keys[e.key.toLowerCase()] = true;
-      if (e.key === 'c') camera.crouch = !camera.crouch;
-      if (e.key >= '1' && e.key <= '4') selectedSlot = Number(e.key) - 1;
-    });
-    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
-    window.addEventListener('mousemove', (e) => {
-      if (document.pointerLockElement === canvas) {
-        camera.yaw -= e.movementX * 0.002;
-        camera.pitch -= e.movementY * 0.002;
-        camera.pitch = Math.max(-1.3, Math.min(1.3, camera.pitch));
-      }
-    });
-    canvas.addEventListener('click', () => canvas.requestPointerLock());
-    canvas.addEventListener('mousedown', (e) => {
-      if (e.button === 0) removeBlock();
-      if (e.button === 2) placeBlock();
-    });
-    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    renderHotbar();
-    loop();
-  </script>
-</body>
-</html><!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Flat Block World</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { overflow: hidden; background: #111; color: #fff; font-family: Arial, sans-serif; }
-    canvas { display: block; width: 100vw; height: 100vh; }
-    #overlay {
-      position: absolute;
-      left: 18px;
-      top: 18px;
-      z-index: 10;
-      font-size: 13px;
-      line-height: 1.6;
-      text-shadow: 0 0 8px rgba(0,0,0,0.8);
-    }
-    #hotbar {
-      position: absolute;
-      bottom: 18px;
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      gap: 6px;
-      z-index: 10;
-    }
-    .slot {
-      width: 36px;
-      height: 36px;
-      border: 2px solid rgba(255,255,255,0.45);
-      display: flex;
+    .hud-item strong { display: block; font-size: 1.05rem; margin-bottom: 6px; }
+    .hud-actions { display: flex; gap: 12px; }
+    .hud-actions button { flex: 1; }
+    .skin-preview { width: 42px; height: 42px; border-radius: 50%; background: #0f2f5f; display: inline-flex; align-items: center; justify-content: center; margin-left: 10px; }
+    .shop-list { display: grid; gap: 16px; text-align: right; margin-top: 14px; }
+    .shop-item {
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 18px;
+      padding: 14px;
+      background: rgba(255,255,255,0.06);
+      display: grid;
+      grid-template-columns: 90px 1fr auto;
       align-items: center;
-      justify-content: center;
-      font-size: 12px;
-      color: #fff;
-      background: rgba(0,0,0,0.5);
+      gap: 12px;
     }
-    .slot.active { border-color: #fff; }
-    .crosshair {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      width: 16px;
-      height: 16px;
-      transform: translate(-50%, -50%);
-      pointer-events: none;
-      z-index: 10;
-    }
-    .crosshair::before, .crosshair::after {
-      content: '';
-      position: absolute;
-      background: #fff;
-    }
-    .crosshair::before { width: 12px; height: 1px; left: 2px; top: 7px; }
-    .crosshair::after { width: 1px; height: 12px; left: 7px; top: 2px; }
+    .shop-item strong { display: block; margin-bottom: 8px; }
+    .shop-price { color: #a8d1ff; }
+    .shop-button { padding: 10px 14px; font-size: 0.95rem; }
+    .shop-button.equipped { background: #2fd36f; }
+    .shop-button.buy { background: #ff9f35; }
+    .footer-text { color: #8da7c8; margin-top: 10px; font-size: 0.95rem; }
   </style>
 </head>
 <body>
-  <canvas id="canvas"></canvas>
-  <div id="overlay">
-    Click canvas to enable look
-    <br>WASD Move | Space Jump | C Crouch
-    <br>Left click remove | Right click place
-    <br>1-4 select block slot
+  <div id="lobby" class="overlay">
+    <div class="card">
+      <h1>סרגוס מנקה את הים</h1>
+      <p>עזור לסרגוס לשחות באוקיינוס, לאסוף זבל ולקנות סקינים חדשים לדג.</p>
+      <div class="hud-item" style="margin: 0 auto 20px; max-width:320px;">
+        <strong>מטבעות קיימים</strong>
+        <span id="lobbyCoins">0</span>
+      </div>
+      <button id="playButton">הפעל משחק</button>
+      <p class="footer-text">המטבעות נשמרות אוטומטית כשאתה חוזר לשחק.</p>
+    </div>
   </div>
-  <div id="hotbar"></div>
-  <div class="crosshair"></div>
+
+  <div id="shop" class="overlay hidden">
+    <div class="card">
+      <h1>חנות סקינים</h1>
+      <p>בחר דג חדש וסרגוס יעוף עם המראה החדש.</p>
+      <div id="shopList" class="shop-list"></div>
+      <div class="hud-actions" style="margin-top: 18px;">
+        <button id="closeShop">סגור חנות</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="gameOver" class="overlay hidden">
+    <div class="card">
+      <h1 id="endTitle">סיום המשחק!</h1>
+      <p id="endText">סרגוס ניקתה את הים ועכשיו הזמן לשחק שוב.</p>
+      <button id="restartButton">שחק שוב</button>
+    </div>
+  </div>
+
+  <div id="hud">
+    <div class="hud-item"><strong>ניקוי</strong><span id="score">0</span></div>
+    <div class="hud-item"><strong>זבל שנשאר</strong><span id="remaining">0</span></div>
+    <div class="hud-item"><strong>מטבעות</strong><span id="coins">0</span></div>
+    <div class="hud-item"><strong>סקין נבחר</strong><span id="currentSkin">סרגוס</span></div>
+    <div class="hud-item hud-actions">
+      <button id="openShop">חנות</button>
+      <button id="restartButtonHud">התחל מחדש</button>
+    </div>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
   <script>
+    const STORAGE_KEY = 'sargusGameData';
+
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
-    const hotbar = document.getElementById('hotbar');
-    function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    }
-    resize();
-    window.addEventListener('resize', resize);
+    const lobby = document.getElementById('lobby');
+    const shop = document.getElementById('shop');
+    const gameOver = document.getElementById('gameOver');
+    const playButton = document.getElementById('playButton');
+    const restartButton = document.getElementById('restartButton');
+    const restartButtonHud = document.getElementById('restartButtonHud');
+    const openShop = document.getElementById('openShop');
+    const closeShop = document.getElementById('closeShop');
+    const shopList = document.getElementById('shopList');
+    const scoreLabel = document.getElementById('score');
+    const remainingLabel = document.getElementById('remaining');
+    const coinsLabel = document.getElementById('coins');
+    const currentSkinLabel = document.getElementById('currentSkin');
+    const lobbyCoins = document.getElementById('lobbyCoins');
+    const endTitle = document.getElementById('endTitle');
+    const endText = document.getElementById('endText');
 
-    const BLOCKS = [
-      { id: 1, name: 'Grass', color: '#5BA93C' },
-      { id: 2, name: 'Dirt', color: '#8B6F47' },
-      { id: 3, name: 'Stone', color: '#888888' },
-      { id: 4, name: 'Wood', color: '#8B5D2B' }
-    ];
+    let width = 0;
+    let height = 0;
+    let lastTime = 0;
+    let keys = {};
+    let score = 0;
+    let trashItems = [];
+    let gameStarted = false;
+    let gameEnded = false;
+    let gameData = { coins: 0, ownedSkins: ['default'], selectedSkin: 'default' };
 
-    const inventory = [
-      { block: BLOCKS[0], count: 32 },
-      { block: BLOCKS[1], count: 20 },
-      { block: BLOCKS[2], count: 12 },
-      { block: BLOCKS[3], count: 16 }
-    ];
-    let selectedSlot = 0;
-    const world = new Map();
-    const GRID = 10;
-
-    for (let x = -GRID; x <= GRID; x++) {
-      for (let z = -GRID; z <= GRID; z++) {
-        world.set(`${x},0,${z}`, BLOCKS[0]);
-      }
-    }
-
-    const camera = {
+    const fish = {
       x: 0,
-      y: 7,
-      z: -12,
-      yaw: 0,
-      pitch: -0.25,
-      speed: 0.18,
-      vy: 0,
-      crouch: false
+      y: 0,
+      speed: 280,
+      size: 32,
+      rotation: 0
     };
-    const keys = {};
 
-    function project(point) {
-      const dx = point.x - camera.x;
-      const dy = point.y - camera.y;
-      const dz = point.z - camera.z;
-      const cosY = Math.cos(camera.yaw);
-      const sinY = Math.sin(camera.yaw);
-      const cosP = Math.cos(camera.pitch);
-      const sinP = Math.sin(camera.pitch);
-      const rx = dx * cosY - dz * sinY;
-      const rz = dx * sinY + dz * cosY;
-      const ry = dy;
-      const ty = ry * cosP - rz * sinP;
-      const tz = ry * sinP + rz * cosP;
-      if (tz <= 0.2) return null;
-      const scale = 600 / tz;
-      return {
-        x: canvas.width / 2 + rx * scale,
-        y: canvas.height / 2 - ty * scale,
-        s: scale
-      };
-    }
-
-    function blockCorners(x, y, z) {
-      return [
-        { x, y, z },
-        { x + 1, y, z },
-        { x + 1, y + 1, z },
-        { x, y + 1, z },
-        { x, y, z + 1 },
-        { x + 1, y, z + 1 },
-        { x + 1, y + 1, z + 1 },
-        { x, y + 1, z + 1 }
-      ];
-    }
-
-    const faces = [
-      [0,1,2,3],
-      [4,5,6,7],
-      [0,1,5,4],
-      [3,2,6,7],
-      [0,3,7,4],
-      [1,2,6,5]
+    const trashTypes = [
+      { name: 'בקבוק', color: '#87d7ff', radius: 14, points: 5, coins: 4 },
+      { name: 'שקית', color: '#ffd4a5', radius: 18, points: 7, coins: 5 },
+      { name: 'אצה', color: '#52b48a', radius: 12, points: 3, coins: 2 }
     ];
 
-    function shadeColor(hex, factor) {
-      const value = parseInt(hex.slice(1), 16);
-      const r = Math.round(((value >> 16) & 255) * factor);
-      const g = Math.round(((value >> 8) & 255) * factor);
-      const b = Math.round((value & 255) * factor);
-      return `rgb(${r},${g},${b})`;
+    const skins = [
+      { id: 'default', name: 'סרגוס', cost: 0, color: '#ffcc4d', accent: '#ffb740', tail: '#ffc645', stripe: '#ffe28f' },
+      { id: 'blue', name: 'סקין כחול', cost: 25, color: '#6fccff', accent: '#3ea9ff', tail: '#9fe3ff', stripe: '#cbefff' },
+      { id: 'green', name: 'סקין ירוק', cost: 45, color: '#7ee6a4', accent: '#36cd7d', tail: '#b9f5cc', stripe: '#d8ffd9' },
+      { id: 'purple', name: 'סקין סגול', cost: 70, color: '#ce92ff', accent: '#a148ff', tail: '#e3c5ff', stripe: '#f0d8ff' }
+    ];
+
+    function loadData() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        if (saved && typeof saved === 'object') {
+          gameData = { ...gameData, ...saved };
+          if (!Array.isArray(gameData.ownedSkins)) gameData.ownedSkins = ['default'];
+          if (!skins.find(s => s.id === gameData.selectedSkin)) gameData.selectedSkin = 'default';
+        }
+      } catch (error) {
+        console.warn('לא הצלחנו לטעון את הנתונים:', error);
+      }
     }
 
-    function drawBlock(x, y, z, block) {
-      const pts = blockCorners(x, y, z).map(project);
-      if (pts.some((p) => p === null)) return;
-      const drawOrder = [1, 0, 2, 3, 4, 5];
-      drawOrder.forEach((faceIndex) => {
-        const face = faces[faceIndex].map((i) => pts[i]);
+    function saveData() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(gameData));
+      updateHud();
+      lobbyCoins.textContent = gameData.coins;
+    }
+
+    function getSkin(id) {
+      return skins.find((skin) => skin.id === id) || skins[0];
+    }
+
+    function resizeCanvas() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+
+    function getRandom(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+
+    function createTrash() {
+      trashItems = [];
+      const count = 14;
+      for (let i = 0; i < count; i++) {
+        const type = trashTypes[Math.floor(Math.random() * trashTypes.length)];
+        trashItems.push({
+          x: getRandom(90, width - 90),
+          y: getRandom(90, height - 140),
+          type,
+          wobble: Math.random() * Math.PI * 2,
+          speedX: getRandom(-24, 24),
+          speedY: getRandom(-12, 12)
+        });
+      }
+      remainingLabel.textContent = `שאר זבל: ${trashItems.length}`;
+    }
+
+    function initGame() {
+      score = 0;
+      gameEnded = false;
+      fish.x = width / 2;
+      fish.y = height / 2;
+      fish.rotation = 0;
+      createTrash();
+      updateHud();
+      shop.classList.add('hidden');
+      gameOver.classList.add('hidden');
+    }
+
+    function updateHud() {
+      scoreLabel.textContent = score;
+      remainingLabel.textContent = trashItems.length;
+      coinsLabel.textContent = gameData.coins;
+      lobbyCoins.textContent = gameData.coins;
+      currentSkinLabel.textContent = getSkin(gameData.selectedSkin).name;
+    }
+
+    function drawBackground() {
+      const gradient = ctx.createLinearGradient(0, 0, 0, height);
+      gradient.addColorStop(0, '#0a3155');
+      gradient.addColorStop(0.45, '#0f4d7a');
+      gradient.addColorStop(1, '#061727');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+
+      for (let i = 0; i < 65; i++) {
+        const x = (i * 117 + Date.now() * 0.02) % width;
+        const y = (i * 83 + Date.now() * 0.03) % height;
+        const alpha = 0.03 + 0.03 * Math.sin((x + y) * 0.018);
+        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
         ctx.beginPath();
-        ctx.moveTo(face[0].x, face[0].y);
-        face.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        const shade = faceIndex === 1 ? 0.82 : (faceIndex === 2 || faceIndex === 3 ? 0.9 : 1);
-        ctx.fillStyle = shadeColor(block.color, shade);
+        ctx.arc(x, y, 2.4, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 1;
-        ctx.stroke();
+      }
+    }
+
+    function drawFish() {
+      const skin = getSkin(gameData.selectedSkin);
+      ctx.save();
+      ctx.translate(fish.x, fish.y);
+      ctx.rotate(fish.rotation);
+      const size = fish.size;
+      ctx.fillStyle = skin.color;
+      ctx.strokeStyle = skin.accent;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, size * 0.72, size * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = skin.tail;
+      ctx.beginPath();
+      ctx.moveTo(-size * 0.62, 0);
+      ctx.lineTo(-size * 1.08, -size * 0.55);
+      ctx.lineTo(-size * 1.08, size * 0.55);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = skin.stripe;
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath();
+        const x = size * 0.1 - i * 7;
+        ctx.ellipse(x, 0, 5, 18 - i * 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(size * 0.28, -size * 0.14, size * 0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#122741';
+      ctx.beginPath();
+      ctx.arc(size * 0.28, -size * 0.14, size * 0.08, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawTrash(item) {
+      ctx.save();
+      ctx.translate(item.x, item.y);
+      ctx.rotate(Math.sin(item.wobble) * 0.22);
+      ctx.fillStyle = item.type.color;
+      ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+      ctx.lineWidth = 2;
+      if (item.type.name === 'בקבוק') {
+        ctx.fillRect(-item.type.radius * 0.35, -item.type.radius, item.type.radius * 0.7, item.type.radius * 1.7);
+        ctx.fillRect(-item.type.radius * 0.25, -item.type.radius * 1.1, item.type.radius * 0.5, item.type.radius * 0.2);
+      } else if (item.type.name === 'שקית') {
+        ctx.beginPath();
+        ctx.moveTo(-item.type.radius * 0.8, -item.type.radius * 0.8);
+        ctx.lineTo(item.type.radius * 0.8, -item.type.radius * 0.8);
+        ctx.lineTo(item.type.radius * 0.6, item.type.radius * 0.8);
+        ctx.lineTo(-item.type.radius * 0.6, item.type.radius * 0.8);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(0, -item.type.radius);
+        ctx.quadraticCurveTo(item.type.radius, 0, 0, item.type.radius);
+        ctx.quadraticCurveTo(-item.type.radius, 0, 0, -item.type.radius);
+        ctx.fill();
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function updateTrash(dt) {
+      trashItems.forEach((item) => {
+        item.wobble += dt * 2;
+        item.x += item.speedX * dt;
+        item.y += item.speedY * dt;
+        if (item.x < 60 || item.x > width - 60) item.speedX *= -1;
+        if (item.y < 100 || item.y > height - 50) item.speedY *= -1;
       });
     }
 
-    function drawWorld() {
-      ctx.fillStyle = '#87CEEB';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      const blocks = [];
-      world.forEach((block, key) => {
-        const [x, y, z] = key.split(',').map(Number);
-        const center = project({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
-        if (!center) return;
-        blocks.push({ x, y, z, block, depth: center.y });
-      });
-      blocks.sort((a, b) => b.depth - a.depth);
-      blocks.forEach((block) => drawBlock(block.x, block.y, block.z, block.block));
-    }
-
-    function groundHeight(x, z) {
-      for (let y = 2; y >= 0; y--) {
-        if (world.has(`${x},${y},${z}`)) return y;
+    function updateFish(dt) {
+      const direction = { x: 0, y: 0 };
+      if (keys['ArrowLeft'] || keys['a'] || keys['A']) direction.x -= 1;
+      if (keys['ArrowRight'] || keys['d'] || keys['D']) direction.x += 1;
+      if (keys['ArrowUp'] || keys['w'] || keys['W']) direction.y -= 1;
+      if (keys['ArrowDown'] || keys['s'] || keys['S']) direction.y += 1;
+      const length = Math.hypot(direction.x, direction.y);
+      if (length > 0) {
+        direction.x /= length;
+        direction.y /= length;
+        fish.x += direction.x * fish.speed * dt;
+        fish.y += direction.y * fish.speed * dt;
+        fish.rotation = Math.atan2(direction.y, direction.x);
       }
-      return -1;
+      fish.x = Math.max(50, Math.min(width - 50, fish.x));
+      fish.y = Math.max(90, Math.min(height - 50, fish.y));
     }
 
-    function update() {
-      const forward = (keys['w'] ? 1 : 0) - (keys['s'] ? 1 : 0);
-      const right = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
-      const dx = Math.sin(camera.yaw) * forward + Math.cos(camera.yaw) * right;
-      const dz = Math.cos(camera.yaw) * forward - Math.sin(camera.yaw) * right;
-      camera.x += dx * camera.speed;
-      camera.z += dz * camera.speed;
-      const ground = groundHeight(Math.floor(camera.x), Math.floor(camera.z));
-      if (!camera.crouch) camera.vy -= 0.01;
-      if (keys[' '] && Math.abs(camera.y - (ground + 2.2)) < 0.2) camera.vy = 0.22;
-      camera.y += camera.vy;
-      if (camera.y < ground + 2.2) {
-        camera.y = ground + 2.2;
-        camera.vy = 0;
-      }
-      if (camera.crouch) camera.y = ground + 1.7;
-    }
-
-    function castRay(maxDist) {
-      const dir = {
-        x: Math.sin(camera.yaw) * Math.cos(camera.pitch),
-        y: Math.sin(camera.pitch),
-        z: Math.cos(camera.yaw) * Math.cos(camera.pitch)
-      };
-      for (let d = 0.5; d < maxDist; d += 0.2) {
-        const x = Math.floor(camera.x + dir.x * d);
-        const y = Math.floor(camera.y + dir.y * d);
-        const z = Math.floor(camera.z + dir.z * d);
-        if (world.has(`${x},${y},${z}`)) {
-          return { x, y, z, nx: Math.sign(dir.x), ny: Math.sign(dir.y), nz: Math.sign(dir.z) };
+    function checkCollisions() {
+      for (let i = trashItems.length - 1; i >= 0; i--) {
+        const item = trashItems[i];
+        const dx = fish.x - item.x;
+        const dy = fish.y - item.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance < fish.size * 0.8 + item.type.radius * 0.6) {
+          score += item.type.points;
+          gameData.coins += item.type.coins;
+          trashItems.splice(i, 1);
+          saveData();
+          updateHud();
         }
       }
-      return null;
-    }
-
-    function placeBlock() {
-      const hit = castRay(6);
-      if (!hit) return;
-      const tx = hit.x + (hit.nx !== 0 ? hit.nx : 0);
-      const ty = hit.y + (hit.ny !== 0 ? hit.ny : 1);
-      const tz = hit.z + (hit.nz !== 0 ? hit.nz : 0);
-      const key = `${tx},${ty},${tz}`;
-      if (!world.has(key)) {
-        world.set(key, inventory[selectedSlot].block);
+      if (trashItems.length === 0 && !gameEnded) {
+        endGame(true);
       }
     }
 
-    function removeBlock() {
-      const hit = castRay(6);
-      if (!hit) return;
-      world.delete(`${hit.x},${hit.y},${hit.z}`);
+    function endGame(won) {
+      gameEnded = true;
+      gameOver.classList.remove('hidden');
+      if (won) {
+        endTitle.textContent = 'כל הכבוד!';
+        endText.textContent = `סרגוס ניקתה את הים וקיבלת ${score} נקודות ו-${gameData.coins} מטבעות.`;
+      } else {
+        endTitle.textContent = 'המשחק נגמר';
+        endText.textContent = `ניקית ${score} נקודות. חזור ונסה שוב כדי לזכות בעוד מטבעות.`;
+      }
     }
 
-    function renderHotbar() {
-      hotbar.innerHTML = '';
-      inventory.forEach((slot, idx) => {
-        const item = document.createElement('div');
-        item.className = 'slot' + (idx === selectedSlot ? ' active' : '');
-        item.textContent = slot.block.name[0] + (slot.count > 1 ? slot.count : '');
-        hotbar.appendChild(item);
-      });
+    function update(dt) {
+      if (!gameStarted || gameEnded) return;
+      updateFish(dt);
+      updateTrash(dt);
+      checkCollisions();
     }
 
-    function loop() {
-      update();
-      drawWorld();
-      renderHotbar();
+    function draw() {
+      drawBackground();
+      trashItems.forEach(drawTrash);
+      drawFish();
+    }
+
+    function loop(timestamp) {
+      if (!lastTime) lastTime = timestamp;
+      const dt = Math.min((timestamp - lastTime) / 1000, 0.033);
+      lastTime = timestamp;
+      update(dt);
+      draw();
       requestAnimationFrame(loop);
     }
 
-    window.addEventListener('keydown', (e) => {
-      keys[e.key.toLowerCase()] = true;
-      if (e.key === 'c') camera.crouch = !camera.crouch;
-      if (e.key >= '1' && e.key <= '4') selectedSlot = Number(e.key) - 1;
-    });
-    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
-    window.addEventListener('mousemove', (e) => {
-      if (document.pointerLockElement === canvas) {
-        camera.yaw -= e.movementX * 0.002;
-        camera.pitch -= e.movementY * 0.002;
-        camera.pitch = Math.max(-1.3, Math.min(1.3, camera.pitch));
+    function openShopOverlay() {
+      shop.classList.remove('hidden');
+      renderShop();
+    }
+
+    function closeShopOverlay() {
+      shop.classList.add('hidden');
+    }
+
+    function renderShop() {
+      shopList.innerHTML = '';
+      skins.forEach((skin) => {
+        const owned = gameData.ownedSkins.includes(skin.id);
+        const button = document.createElement('button');
+        button.className = 'shop-button ' + (owned ? 'equipped' : 'buy');
+        button.textContent = owned ? (gameData.selectedSkin === skin.id ? 'מצויד' : 'בחר') : `קנה ${skin.cost}`;
+        const item = document.createElement('div');
+        item.className = 'shop-item';
+        item.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;">
+            <div class="skin-preview" style="background:${skin.color}; border: 2px solid ${skin.accent};"></div>
+            <div>
+              <strong>${skin.name}</strong>
+              <span class="shop-price">${skin.cost > 0 ? skin.cost + ' מטבעות' : 'בחינם'}</span>
+            </div>
+          </div>
+        `;
+        button.addEventListener('click', () => {
+          if (owned) {
+            gameData.selectedSkin = skin.id;
+            saveData();
+            updateHud();
+            renderShop();
+          } else if (gameData.coins >= skin.cost) {
+            gameData.coins -= skin.cost;
+            gameData.ownedSkins.push(skin.id);
+            gameData.selectedSkin = skin.id;
+            saveData();
+            updateHud();
+            renderShop();
+          }
+        });
+        item.appendChild(button);
+        shopList.appendChild(item);
+      });
+    }
+
+    window.addEventListener('resize', () => {
+      resizeCanvas();
+      if (!gameStarted) {
+        fish.x = width / 2;
+        fish.y = height / 2;
       }
     });
-    canvas.addEventListener('click', () => canvas.requestPointerLock());
-    canvas.addEventListener('mousedown', (e) => {
-      if (e.button === 0) removeBlock();
-      if (e.button === 2) placeBlock();
+
+    window.addEventListener('keydown', (event) => {
+      keys[event.key] = true;
     });
-    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    renderHotbar();
-    loop();
+
+    window.addEventListener('keyup', (event) => {
+      keys[event.key] = false;
+    });
+
+    playButton.addEventListener('click', () => {
+      lobby.classList.add('hidden');
+      gameStarted = true;
+      initGame();
+    });
+
+    restartButton.addEventListener('click', () => {
+      gameOver.classList.add('hidden');
+      gameStarted = true;
+      initGame();
+    });
+
+    restartButtonHud.addEventListener('click', () => {
+      gameStarted = true;
+      initGame();
+    });
+
+    openShop.addEventListener('click', openShopOverlay);
+    closeShop.addEventListener('click', closeShopOverlay);
+
+    loadData();
+    resizeCanvas();
+    initGame();
+    saveData();
+    requestAnimationFrame(loop);
   </script>
 </body>
 </html>
+
